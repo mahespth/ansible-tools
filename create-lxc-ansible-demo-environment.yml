@@ -1,0 +1,166 @@
+---
+
+- hosts: 127.0.0.1
+  become: no
+  gather_facts: no
+  vars:
+   lxcPath: /var/lib/lxc
+   containers: ["ansible-client-centos", "ansible-client-fedora", "ansible-client-ubuntu"]
+
+  tasks:
+  - name: Clean up /etc/hosts entries
+    lineinfile:
+      dest: /etc/hosts
+      regexp: '{{ item }}'
+      state: absent
+    with_items: "{{ containers }}"
+
+  - name: Get local SSH key path
+    set_fact:
+      my_ssh_key: "{{ lookup('env','HOME') }}/.ssh/id_rsa.pub"
+
+  - name: Define {{ lxcPath }}
+    file: path={{ lxcPath }} state=directory mode=0750
+
+  - name: Ensure that python2-lxc exists
+    package:
+     name: python2-lxc
+     state: present
+     use: yum
+
+#  - name: Create a Ansible Server Container
+#    lxc_container:
+#     name: ansible-server
+#     container_log: no
+#     backing_store: dir
+#     #lxc_path: "{{ lxcPath }}"
+#     state: started
+#     template: download
+#     template_options: -d centos -r 7 -a amd64
+#     config:
+#       security.privileged: true
+
+  - name: Create a Ansible Centos Client Container
+    lxc_container:
+     name: ansible-client-centos
+     container_log: no
+     backing_store: dir
+     lxc_path: "{{ lxcPath }}"
+     template: download
+     template_options: -d centos -r 7 -a amd64
+     container_command: |
+      test -x /usr/sbin/sshd || yum -y install openssh-server 
+      test -x /usr/bin/sudo  || yum -y install sudo
+      systemctl start sshd
+
+  - name: Create a Ansible fedora Client Container
+    lxc_container:
+     name: ansible-client-fedora
+     container_log: no
+     backing_store: dir
+     lxc_path: "{{ lxcPath }}"
+     template: download
+     template_options: -d fedora -r 28 -a amd64
+     container_command: |
+      test -x /usr/sbin/sshd || dnf -y install openssh-server 
+      test -x /usr/bin/sudo  || dnf -y install sudo
+      systemctl start sshd
+
+  - name: Create a Ansible fedora Client Container
+    lxc_container:
+     name: ansible-client-ubuntu
+     container_log: no
+     backing_store: dir
+     lxc_path: "{{ lxcPath }}"
+     template: download
+     template_options: -d ubuntu -r xenial -a amd64
+     container_command: |
+      test -x /usr/sbin/sshd || apt-get -y install openssh-server 
+      test -x /usr/bin/sudo  || apt-get -y sudo 
+      systemctl start sshd
+
+  - name: Generate Accounts on LXD containers
+    lxc_container:
+      name: "{{ item }}"
+      state: started
+      container_command: |
+       groupadd -g 802 mahespth
+       groupadd -g 803 ansible
+       useradd -u 802 -g 802 -G root -m -c "Maher, Stephen" mahespth
+       useradd -u 803 -g 803 -G root -m -c "Ansible User" ansible
+       grep -q ^wheel: /etc/group && groupmems -g wheel ansible
+       grep -q ^admins: /etc/group && groupmems -g admins ansible
+       sudo -u ansible mkdir -p ~ansible/.ssh
+       sudo -u ansible touch ~ansible/.ssh/authorized_keys
+       echo "{{ lookup('file', my_ssh_key) }}" >~ansible/.ssh/authorized_keys
+       chown ansible:ansible ~ansible/.ssh/authorized_keys
+       echo "%ansible	ALL=(ALL)	NOPASSWD: ALL" >/etc/sudoers.d/ansible
+       /bin/uptime >/tmp/uptime
+    with_items: "{{ containers }}"
+    register: initial_account_info
+
+  - name: Get containers info now that IPs are available
+    lxc_container:
+      name: "{{ item }}"
+    with_items: "{{ containers }}"
+    register: containers_info
+
+  - debug:
+     msg: "{{ containers_info.results | to_nice_json(indent=2) }}"
+
+  - name: Register the hosts in the inventory
+    add_host:
+      name: "{{ item.lxc_container.ips.0 }}"
+      group: "lxc"
+    with_items: "{{ containers_info.results }}"
+
+  - name: Add IP address of all hosts to all hosts
+    lineinfile:
+      dest: /etc/hosts
+      line: "{{ item.lxc_container.ips.0 }} {{ item.lxc_container.name }}"
+      state: present
+    with_items: "{{ containers_info.results }}"
+
+  - name: Wait for SSHD to become available
+    wait_for:
+      port: 22
+      host: "{{ item.lxc_container.ips.0 }}"
+      delay: 2 
+    with_items: "{{ containers_info.results }}"
+
+  - name: container key is up-to-date locally
+    shell: |
+     ssh-keygen -R {{ item.lxc_container.ips.0 }};
+     ssh-keyscan "{{ item.lxc_container.ips.0 }}" >>~/.ssh/known_hosts
+    with_items: "{{ containers_info.results }}"
+
+- hosts: lxc
+  gather_facts: false
+  become: yes
+  remote_user: ansible
+  vars:
+       testPath: /root/testPath
+       ansible_ssh_user: ansible
+
+  #[[ -e /etc/centos-release && ! -x /usr/bin/python ]] && yum -y install python-minimal;
+  #lsb_release -is 2>/dev/null | grep -q Ubuntu && test -x /usr/bin/python || apt-get -y install python-minimal
+  pre_tasks:
+  - raw: test -e /usr/bin/python || dnf -y install python-minimal
+  - setup:	# gather facts
+
+  tasks:
+  - set_fact:
+    #ansible_ssh_user: ansible
+
+  - name: Define {{ testPath }}
+    file: path={{ testPath }} state=directory mode=0750
+
+  - name: Ensure that sshd is installed
+    package:
+      name: openssh-server
+      state: present
+   
+  - name: Ensure that apache is installed
+    package:
+      name: httpd
+      state: present
