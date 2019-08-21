@@ -1,0 +1,91 @@
+---
+- hosts: localhost
+  become: no
+  gather_facts: no
+
+  tasks:
+    - name: check directory
+      file:
+        path: ~/.vim/autoload/
+        state: directory
+
+    - name: check directory
+      file:
+        path: ~/.vim/bundle/
+        state: directory
+
+    - name: get pathogen
+      get_url:
+        url: https://raw.githubusercontent.com/tpope/vim-pathogen/master/autoload/pathogen.vim 
+        dest: ~/.vim/autoload/pathogen.vim
+        use_proxy: yes
+      environment:
+        https_proxy: http://proxy.ocado.com/
+
+    - name: update .vimrc
+      lineinfile:
+        path: ~/.vimrc
+        insertbefore: BOF
+        line: execute pathogen#infect() 
+
+    - name: update .vimrc
+      lineinfile:
+        path: ~/.vimrc
+        line: filetype plugin indent on
+
+    - name: update .vimrc
+      lineinfile:
+        path: ~/.vimrc
+        regex: "^syntax[\\s]*"
+        firstmatch: yes
+        line: syntax on
+
+    - name:
+      command:
+        chdir: "~/.vim"
+        argv: 
+          - git 
+          - init
+        creates: ~/.vim/.git
+
+    - name:
+      command:
+        chdir: "~/.vim"
+        argv: 
+          - git 
+          - submodule 
+          - init
+
+    - name: configure git to talk to the https proxy
+      git_config:
+        name: https.proxy
+        value: "http://proxy.xxxxxx.com/"
+        scope: "global"
+
+    - name: configure git to talk to the http proxy
+      git_config:
+        name: http.proxy
+        value: "http://proxy.ocado.com/"
+        scope: "global"
+
+    - name: configure git to talk ignore the ssl cert validation
+      git_config:
+        name: http.sslVerify
+        value: "false"
+        scope: "global"
+
+    - name: add module https://github.com/pearofducks/ansible-vim
+      git:
+        repo: https://github.com/pearofducks/ansible-vim.git
+        dest: ~/.vim/bundle/ansible-vim
+        track_submodules: yes
+      environment:
+        https_proxy: http://proxy.xxxxx.com/
+
+    - name: add indentLine module from https://github.com/Yggdroot/indentLine
+      git:
+        repo: https://github.com/Yggdroot/indentLine.git
+        dest: ~/.vim/bundle/indentLine
+        track_submodules: yes
+      environment:
+        https_proxy: http://proxy.xxxxxxx.com/
