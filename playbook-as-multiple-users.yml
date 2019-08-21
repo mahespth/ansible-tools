@@ -1,0 +1,24 @@
+---
+- hosts: localhost
+  gather_facts: no
+  
+  tasks:
+    - name: Run a command as stephen.maher
+      command: whoami
+      become: yes
+      become_method: sudo
+      become_user: stephen.maher
+      register: output
+
+    - debug:
+        var: output.stdout_lines
+    
+    - name: Run a command as nobody
+      command: whoami
+      become: yes
+      become_method: sudo
+      become_user: root
+      register: output
+
+    - debug:
+        var: output.stdout_lines
