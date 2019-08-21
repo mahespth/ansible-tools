@@ -4,4 +4,13 @@
 
 
 
- "{{ lookup('env','USER') }}".
+ ansible_user="{{ lookup('env','USER') }}".
+
+
+
+Markdown Cheatsheet.
+
+https://github.com/adam-p/markdown-here/wiki/Markdown-Cheatsheet
+
+
+
