@@ -8,6 +8,13 @@
 
 
 
+ansible all -i inventory.yml -m win_ping
+172.31.xx.xx | SUCCESS => {
+    "changed": false,
+    "ping": "pong"
+}
+
+
 Markdown Cheatsheet.
 
 https://github.com/adam-p/markdown-here/wiki/Markdown-Cheatsheet
