@@ -1,0 +1,26 @@
+---
+
+- name: Promote new RHEL7 version to Lifecycle Environments
+    uri:
+      url: "https://satelliteserver/katello/api/v2/content_view_versions/{{ (content_views7.json.results[0].id | int) }}/promote"
+      method: POST
+      body:
+        description: "Promoted by Tower"
+        environment_id: "{{ item }}"
+        organization_id: 3
+        force: true
+      user: "{{ satellite_user }}"
+      password: "{{ satellite_pass }}"
+      force_basic_auth: yes
+      validate_certs: yes
+      body_format: json
+      status_code: 202
+    loop:
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+    loop_control:
+      pause: 180
