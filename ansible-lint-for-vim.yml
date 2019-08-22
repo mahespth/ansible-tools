@@ -39,6 +39,21 @@
         regex: "^syntax[\\s]*"
         firstmatch: yes
         line: syntax on
+      
+      
+    - name: update .vimrc
+      lineinfile:
+        path: ~/.vimrc
+        regex: "^syntax[\\s]*"
+        firstmatch: yes
+        line: autocmd FileType yaml setlocal ai ts=2 sw=2 et
+        
+    - name: update .vimrc
+      lineinfile:
+        path: ~/.vimrc
+        regex: "^syntax[\\s]*"
+        firstmatch: yes
+        set backspace=indent,eol,start
 
     - name:
       command:
