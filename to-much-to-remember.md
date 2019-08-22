@@ -1,15 +1,14 @@
-#H1
-To-much-to-remember: Ansible.
+# To-much-to-remember: Ansible.
 
 
 
 
-
+##  Lookup local user
  ansible_user="{{ lookup('env','USER') }}".
 
 
 
-ansible all -i inventory.yml -m win_ping
+`ansible all -i inventory.yml -m win_ping`
 172.31.xx.xx | SUCCESS => {
     "changed": false,
     "ping": "pong"
@@ -31,7 +30,10 @@ ansible all -i inventory.yml -m win_ping
 ==================================================================
 
 
-ansible-doc -t cliconf -l 
+##  Get all cliconf (ansible_connection) plugins
+
+`ansible-doc -t cliconf -l `
+
 aireos     Use aireos cliconf to run command on Cisco WLC platform                                                                                                                                         
 aruba      Use aruba cliconf to run command on Aruba platform                                                                                                                                              
 asa        Use asa cliconf to run command on Cisco ASA platform                                                                                                                                            
