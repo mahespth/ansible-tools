@@ -1,0 +1,27 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    foo: bar
+    cops_es_nginx_foo: bar
+  tasks:
+
+    - set_fact:
+        es_vhost: |
+          {% set nginx = {'v': {}} %}
+          {% set o = 'cops_es_nginx_' %}
+          {% set p = 'corpusops_nginx_' %}
+          {% for i, val in vars.items() %}
+          {%  if i.startswith(o) %}
+          {%    set _ = nginx.v.update({p+o.join(i.split(o)[1:]): val}) %}
+          {%  endif %}
+          {% endfor %}
+          {{ nginx.v | to_json }}
+    - debug:
+        var: es_vhost
+
+    - include_role:
+        name: test
+      vars:
+        role_vhost: '{{ es_vhost }}'
