@@ -1,0 +1,11 @@
+- name: give me list combo of two lists
+  debug:
+    msg: "{{ [1,2,3,4,5] | zip(['a','b','c','d','e','f']) | list }}"
+
+- name: give me shortest combo of two lists
+  debug:
+    msg: "{{ [1,2,3] | zip(['a','b','c','d','e','f']) | list }}"
+
+ - name: give me longest combo of three lists , fill with X
+   debug:
+     msg: "{{ [1,2,3] | zip_longest(['a','b','c','d','e','f'], [21, 22, 23], fillvalue='X') | list }}"
