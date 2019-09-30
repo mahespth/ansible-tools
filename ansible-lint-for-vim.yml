@@ -20,7 +20,7 @@
         dest: ~/.vim/autoload/pathogen.vim
         use_proxy: yes
       environment:
-        https_proxy: http://proxy.ocado.com/
+        https_proxy: http://proxy.company.com/
 
     - name: update .vimrc
       lineinfile:
@@ -80,7 +80,7 @@
     - name: configure git to talk to the http proxy
       git_config:
         name: http.proxy
-        value: "http://proxy.ocado.com/"
+        value: "http://proxy.company.com/"
         scope: "global"
 
     - name: configure git to talk ignore the ssl cert validation
