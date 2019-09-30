@@ -23,8 +23,9 @@
         https_proxy: http://proxy.company.com/
         
     - name: chekck ~/.vimrc exists
-      path: ~/.vimrc
-      state: directory
+      file:
+        path: ~/.vimrc
+        state: directory
 
     - name: update .vimrc
       lineinfile:
