@@ -1,0 +1,11 @@
+----
+
+# https://docs.ansible.com/ansible/latest/user_guide/playbooks_filters.html#filters-for-formatting-data
+
+{{ [0,2] | map('extract', ['x','y','z']) | list }}
+{{ ['x','y'] | map('extract', {'x': 42, 'y': 31}) | list }}
+
+{{ groups['x'] | map('extract', hostvars, 'ec2_ip_address') | list }}
+
+{{ ['a'] | map('extract', b, ['x','y']) | list }}
+
