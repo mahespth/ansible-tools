@@ -25,7 +25,7 @@
     - name: chekck ~/.vimrc exists
       file:
         path: ~/.vimrc
-        state: directory
+        state: touch
 
     - name: update .vimrc
       lineinfile:
@@ -45,7 +45,6 @@
         firstmatch: yes
         line: syntax on
       
-      
     - name: update .vimrc
       lineinfile:
         path: ~/.vimrc
@@ -58,7 +57,7 @@
         path: ~/.vimrc
         regex: "^syntax[\\s]*"
         firstmatch: yes
-        set backspace=indent,eol,start
+        line: set backspace=indent,eol,start
 
     - name:
       command:
