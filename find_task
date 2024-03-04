@@ -1,24 +1,77 @@
+#!/usr/bin/python3
+
 """
   find tasks in large codebase
 """
 
+import argparse
+import textwrap
+import pprint
 import glob
 import yaml
+import os.path
 import re
 
+class Vault(yaml.YAMLObject):
+    yaml_tag = u'!vault'
+
+    def __init__(self,value):
+        pass
+
+    def __new__(self,tag,value):
+        return value
+
+    def __repr__(self, value):
+        #print('%s' % self.name)
+        return "%s(value=%)" % ( self.__class__.__name__, self.value )
+
+yaml.SafeLoader.add_constructor(u'!vault', Vault)
+yaml.SafeLoader.add_constructor(u'!vault-encrypted', Vault)
+
+def find_yaml(directory):
+
+    yaml_files = []
+    shell_scripts = []
+    python_files = []
+
+    if os.path.isfile(directory):
+        yaml_files.append( directory )
+
+    else:
+        excluded = set(['.git'])
+
+        for root, dirs, files in os.walk(directory, topdown=True):
+            dirs[:] = [d for d in dirs if d not in excluded]
+
+            for file in files:
+                if file.endswith((".yaml",".yml",".json",".jsn")):
+                    yaml_files.append( os.path.join(root, file) )
+
+    return yaml_files
+
+def yaml_print( output ):
+        print( yaml.dump(output[0]) )
+        print( yaml.dump(output[1]) )
+
+
 def search_tasks(yaml_content, pattern, filepath):
+
     ansible_tasks = []
 
     if isinstance(yaml_content, dict):
         for key, value in yaml_content.items():
-            if key == 'tasks' and isinstance(value, list):
+            if isinstance(value, list):
                 for task in value:
-                    if isinstance(task, dict) and 'ansible' in task:
-                        ansible_task = task['ansible']
-                        if pattern.search(str(ansible_task)):
-                            ansible_tasks.append((filepath, ansible_task))
+                    if isinstance(task, dict):
+                        for taskitem in task:
+                          if pattern.search(str(task[taskitem])):
+                                ansible_tasks.append((filepath, task))
             elif isinstance(value, (dict, list)):
-                ansible_tasks.extend(search_tasks(value, pattern, filepath))
+                for taskitem in value:
+                    if pattern.search(str(value[taskitem])):
+                        ansible_tasks.append((filepath, value))
+
+
 
     elif isinstance(yaml_content, list):
         for item in yaml_content:
@@ -27,36 +80,25 @@ def search_tasks(yaml_content, pattern, filepath):
 
     return ansible_tasks
 
+
+
 def find_ansible_tasks(directory, regex):
     # Find all YAML files in the directory
-    yaml_files = glob.glob(directory + "/*.yaml")
+    yaml_files = find_yaml(directory)
     ansible_tasks = []
 
     # Compile the regular expression
     pattern = re.compile(regex)
 
     for yaml_file in yaml_files:
+
         with open(yaml_file, 'r') as file:
             yaml_content = yaml.safe_load(file)
 
-            # Check if the YAML content is a dictionary
-            if isinstance(yaml_content, dict):
-                # Check if the YAML content has tasks
-                if 'tasks' in yaml_content:
-                    tasks = yaml_content['tasks']
-
-                    # Loop through tasks
-                    for task in tasks:
-                        # Check if the task is a dictionary
-                        if isinstance(task, dict):
-                            # Check if the task is an Ansible task
-                            if 'ansible' in task:
-                                ansible_task = task['ansible']
-                                # Check if the task matches the regex
-                                if pattern.search(str(ansible_task)):
-                                    ansible_tasks.append(ansible_task)
+            ansible_tasks.extend(search_tasks(yaml_content,pattern,yaml_file) )
 
     return ansible_tasks
+
 
 def main():
     parser = argparse.ArgumentParser(description='Find Ansible tasks in YAML files.')
@@ -66,9 +108,11 @@ def main():
     args = parser.parse_args()
 
     tasks = find_ansible_tasks(args.path, args.regex)
+
+
     print("Matching Ansible tasks:")
     for task in tasks:
-        print(task)
+        yaml_print(task)
 
 if __name__ == "__main__":
     main()
