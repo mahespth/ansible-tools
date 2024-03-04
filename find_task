@@ -1,0 +1,57 @@
+"""
+  find tasks in large codebase
+"""
+
+import glob
+import yaml
+import re
+
+def find_ansible_tasks(directory, regex):
+    # Find all YAML files in the directory
+    yaml_files = glob.glob(directory + "/*.yaml")
+    ansible_tasks = []
+
+    # Compile the regular expression
+    pattern = re.compile(regex)
+
+    for yaml_file in yaml_files:
+        with open(yaml_file, 'r') as file:
+            yaml_content = yaml.safe_load(file)
+
+            # Check if the YAML content is a dictionary
+            if isinstance(yaml_content, dict):
+                # Check if the YAML content has tasks
+                if 'tasks' in yaml_content:
+                    tasks = yaml_content['tasks']
+
+                    # Loop through tasks
+                    for task in tasks:
+                        # Check if the task is a dictionary
+                        if isinstance(task, dict):
+                            # Check if the task is an Ansible task
+                            if 'ansible' in task:
+                                ansible_task = task['ansible']
+                                # Check if the task matches the regex
+                                if pattern.search(str(ansible_task)):
+                                    ansible_tasks.append(ansible_task)
+
+    return ansible_tasks
+
+for task in tasks:
+    print(task)
+
+
+    def main():
+    parser = argparse.ArgumentParser(description='Find Ansible tasks in YAML files.')
+    parser.add_argument('-p', '--path', required=True, help='Path to directory containing YAML files')
+    parser.add_argument('-r', '--regex', required=True, help='Regular expression pattern to match tasks')
+
+    args = parser.parse_args()
+
+    tasks = find_ansible_tasks(args.path, args.regex)
+    print("Matching Ansible tasks:")
+    for task in tasks:
+        print(task)
+
+if __name__ == "__main__":
+    main()
