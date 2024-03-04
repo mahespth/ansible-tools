@@ -6,6 +6,27 @@ import glob
 import yaml
 import re
 
+def search_tasks(yaml_content, pattern, filepath):
+    ansible_tasks = []
+
+    if isinstance(yaml_content, dict):
+        for key, value in yaml_content.items():
+            if key == 'tasks' and isinstance(value, list):
+                for task in value:
+                    if isinstance(task, dict) and 'ansible' in task:
+                        ansible_task = task['ansible']
+                        if pattern.search(str(ansible_task)):
+                            ansible_tasks.append((filepath, ansible_task))
+            elif isinstance(value, (dict, list)):
+                ansible_tasks.extend(search_tasks(value, pattern, filepath))
+
+    elif isinstance(yaml_content, list):
+        for item in yaml_content:
+            if isinstance(item, (dict, list)):
+                ansible_tasks.extend(search_tasks(item, pattern, filepath))
+
+    return ansible_tasks
+
 def find_ansible_tasks(directory, regex):
     # Find all YAML files in the directory
     yaml_files = glob.glob(directory + "/*.yaml")
