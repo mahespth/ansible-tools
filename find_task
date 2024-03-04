@@ -37,11 +37,7 @@ def find_ansible_tasks(directory, regex):
 
     return ansible_tasks
 
-for task in tasks:
-    print(task)
-
-
-    def main():
+def main():
     parser = argparse.ArgumentParser(description='Find Ansible tasks in YAML files.')
     parser.add_argument('-p', '--path', required=True, help='Path to directory containing YAML files')
     parser.add_argument('-r', '--regex', required=True, help='Regular expression pattern to match tasks')
