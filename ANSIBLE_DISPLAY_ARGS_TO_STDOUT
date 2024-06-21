@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+(( $SHLVL > 1 )) && echo '[I] Ensure you source this file !!!' && exit 1
+
+export ANSIBLE_DISPLAY_ARGS_TO_STDOUT=true
