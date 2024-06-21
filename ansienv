@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Ansible autocomplete of environment vars
+# ----------------------------------------------------
+# Example: ansenv XXXXXX=XXXXXX
+
+(( $SHLVL > 1 )) && echo 'error: Ensure you source this file !!!' >&2 && exit 1
+
+function function_ansible_config
+{
+	if [[ -n $2 ]]
+	then
+		COMPREPLY=( $( ansible-config list | awk '/- name: '$2'/ { print $3 }' ) )
+	else
+		COMPREPLY=( $( ansible-config dump | awk '/- name: / { print $3 }' ) )
+	fi
+}
+
+alias ansienv=export
+complete -F function_ansible_config ansienv
+
+# noexit
