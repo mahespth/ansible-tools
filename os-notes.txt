@@ -1,0 +1,21 @@
+
+
+oc[xxx] login --insecure-skip-tls-veryft https://ep;6443/ --username ${USER}
+
+Create .kube/config
+oc[xxx] config set users.$CLUSTER-user.token $TOKEN && oc config use-context $CLUSTER
+
+https://docs.openshift.com/container-platform/3.11/install_config/http_proxies.html
+
+# Global Proxy Configuration
+# These options configure HTTP_PROXY, HTTPS_PROXY, and NOPROXY environment
+# variables for docker and master services.
+openshift_http_proxy=http://<user>:<password>@<ip_addr>:<port>
+openshift_https_proxy=https://<user>:<password>@<ip_addr>:<port>
+openshift_no_proxy='.hosts.example.com,some-host.com'
+#
+# Most environments do not require a proxy between OpenShift masters, nodes, and
+# etcd hosts. So automatically add those host names to the openshift_no_proxy list.
+# If all of your hosts share a common domain you may wish to disable this and
+# specify that domain above.
+# openshift_generate_no_proxy_hosts=True
