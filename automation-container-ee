@@ -1,2 +1,46 @@
 #!/usr/bin/bash
 
+
+
+if [[ -z ${name} ]]
+then
+        CONTAINER_ID=$(
+                podman run \
+                        --init \
+                        -d \
+                        -t \
+                        ${EXTRA_RUN_OPTIONS[*]} \
+                        --userns=keep-id:uid=${CONTAINER_NS_ID:-'100'},gid=10 \
+                        --name ${CONTAINER_NAME} \
+                        ${CONTAINER_MOUNTS[*]} ${PRIV_TRUE} \
+                        "${POD_ID}"
+                )
+        echo "[I] started container ${CONTAINER_ID}"
+else
+        name=$( podman ps --filter name="${CONTAINER_NAME}\$" -q )
+
+        if [[ -z ${name}  ]]
+        then
+                CONTAINER_ID=$( podman start ${CONTAINER_NAME} )
+                echo "[I] started existing container ${CONTAINER_ID}"
+        fi
+fi
+
+if [[ -n $1 ]]
+then
+        BASH_SHELL_EXEC="-c 'ansible-playbook $@'"
+fi
+
+if [[ -n $1 ]]
+then
+        BASH_SHELL_EXEC="-c 'ansible-playbook $@'"
+fi
+
+eval podman exec \
+        -it \
+        ${EXTRA_EXEC_OPTIONS[*]} \
+        -e "AZ_LOGIN=${AZ_LOGIN}" \
+        "${CONTAINER_NAME}" \
+        bash ${CONTAINER_SHELL_OPTIONS} ${BASH_SHELL_EXEC}
+
+exit $?
