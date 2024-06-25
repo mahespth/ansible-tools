@@ -1,5 +1,64 @@
 #!/usr/bin/bash
 
+if [[ ${POD_REMOVE} == true ]]
+then
+        name=$( podman ps -a --filter name="${CONTAINER_NAME}\$" -q 2>/dev/null )
+
+        if [[ -n ${name} ]]
+        then
+                podman stop ${CONTAINER_NAME} >/dev/null
+        else
+                if [[ -d ${AUTOMATION_PATH} ]]
+                then
+                        echo "[I] ${AUTOMATION_PATH} needs removing manually"
+                fi
+
+                if [[ ${REMOVE_ONLY} == true ]]
+                then
+                        echo "[I] container ${CONTAINER_NAME} has already been removed."
+                        exit 0
+                fi
+        fi
+
+        podman rm ${CONTAINER_NAME} >/dev/null 2>&1
+
+        echo "[I] Removed ${CONTAINER_NAME}"
+fi
+
+if [[ ${REMOVE_ONLY} == true ]]
+then
+        exit $?
+fi
+
+if [[ -z ${NOPULL} ]]
+then
+        if [[ ${CONTAINER_URI} == @(*:*) && -z ${NOPULL} ]]
+        then
+                echo "[I] Pulling: ${CONTAINER_URI}"
+                POD_ID=$( podman pull ${CONTAINER_URI}  -q )
+        else
+                echo "[I] Pulling: ${CONTAINER_URI}${CONTAINER_VERSION:+":$CONTAINER_VERSION"}"
+                POD_ID=$( podman pull ${CONTAINER_URI}${CONTAINER_VERSION:+":$CONTAINER_VERSION"}  -q )
+        fi
+
+        if [[ -z ${POD_ID} ]]
+        then
+                exit 1
+        fi
+fi
+
+name=$( podman ps -a --filter name="${CONTAINER_NAME}\$" -q )
+
+
+if [[ ${FORWARD_KRB5} == true ]]
+then
+        KRB5CCNAME_SHORT=${KRB5CCNAME##*:}
+        CONTAINER_MOUNTS+=("-v ${KRB5CCNAME_SHORT}:${KRB5CCNAME_SHORT}:Z")
+        EXTRA_EXEC_OPTIONS+=( -e "KRB5CCNAME=${KRB5CCNAME}" )
+
+        echo "[I] Forwarding KRB5 cache ${KRB5CCNAME}"
+fi
+
 
 if [[ ${DEV_MODE} == true ]]
 then
