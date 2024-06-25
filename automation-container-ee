@@ -1,6 +1,77 @@
 #!/usr/bin/bash
 
+DEV_MODE=${DEV_MODE:-false}
+REPO_URL=${REPO_URL:-'https://github.com/mahespth/repos'}
+AZ_LOGIN="${AZ_LOGIN:-false}"
+POD_REMOVE="${POD_REMOVE:-false}"
+AUTOMATION_URL=${AUTOMATION_URL:-"${REPO_URL}/setup.yml"}
+AUTOMATION_UPDATE=${AUTOMATION_UPDATE:-true}
+AUTOMATION_VERSION=${AUTOMATION_VERISON:-"${REPO_URL}/_automation/latest-version"}
+CONTAINER_MOUNTS=()
+PREVIOUS_RELEASE=${PREVIOUS_RELEASE:-false}
+AWX_EE_URI="quay.io/${QUAY_PROJECT}/${QUAY_PROJECT_PREFIX}-${AWX_EE_VERSION:-latest}"
+CONTROL_NODE_URI="quay.io/${QUAY_PROJECT}/${QUAY_PROJECT_PREFIX}/control_node:lastet"
+CONTAINER_VERSION=${CONTAINER_VERSION:-"1.0.20"}
+#CONTAINER_URI=${CONTAINER_URI:-"quay.io/${QUAY_PROJECT}/${QUAY_PROJECT_PREFIX}/${QUAY_PROJECT_PREFIX}-python:$CONTAINER_VERSION"}
+#EE_VERSION="latest"
+EE_VERSION="${EE_VERSION:-3.0.40}"
+CONTAINER_URI=${CONTAINER_URI:-"quay.io/${QUAY_PROJECT}/${QUAY_PROJECT_PREFIX}_ee:${EE_VERSION}"}
 
+RELEASE_VERSION=$( curl -sq "${AUTOMATION_VERSION}" )
+AUTOMATION_RELEASE=${AUTOMATION_RELEASE:-"${RELEASE_VERSION}"}
+
+# ------------------------------------------------------------
+if [[ ${CONTAINER_URI} == @(*_ee*) ]]
+then
+        CONTAINER_NS_ID=1000
+fi
+
+if [[ ! -s ~/.automation-version-latest ]]
+then
+        echo "${RELEASE_VERSION}" > ~/.automation-version-latest
+else
+        LAST_RELEASE=$( cat ~/.automation-version-latest )
+
+        if [[ ${LAST_RELEASE} != ${RELEASE_VERSION} ]]
+        then
+                echo "** NOTICE ** New release is available (${RELEASE_VERSION})"
+
+                if [[ -z ${PREVIOUS_RELEASE} && -z ${AUTOMATION_RELEASE} && ${AUTOMATION_UPDATE} == false ]]
+                then
+                        echo "** NOTICE ** you must specifiy the version for an existing container."
+                        exit 1
+                fi
+        fi
+
+        if [[ ${RELEASE_VERSION} == ${AUTOMATION_RELEASE} ]]
+        then
+                echo "${RELEASE_VERSION}" > ~/.automation-version-latest
+        fi
+fi
+
+#AUTOMATION_PATH=${AUTOMATION_PATH:-/${GIT_HOME}/${USER}/_automation}"
+AUTOMATION_PATH=${AUTOMATION_PATH:-"/${GIT_HOME}/${USER}/_automation_v${AUTOMATION_RELEASE}"}
+
+if [[ ${PREVIOUS_RELEASE} == true ]]
+then
+        CURRENT_RELEASE=${AUTOMATION_RELEASE}
+
+        _va=( ${AUTOMATION_RELEASE//./ } )
+        _va[-1]=$(( _va[-1]-1 ))
+
+        AUTOMATION_RELEASE=${_va[*]}
+        AUTOMATION_RELEASE=${AUTOMATION_RELEASE// /.}
+
+        AUTOMATION_PATH="/${GIT_HOME}/${USER}/automation_v${AUTOMATION_RELEASE}"
+
+fi
+
+if [[ -n ${STORY_NAME} ]]
+then
+        CONTAINER_NAME="${STORY_NAME//-/_}_v${AUTOMATION_RELEASE//./_}_automation"${CONTAINER_SUFFIX:+"_${CONTAINER_SUFFIX}"}
+else
+        CONTAINER_NAME="${USER}_v${AUTOMATION_RELEASE//./_}_automation"${CONTAINER_SUFFIX:+"_${CONTAINER_SUFFIX}"}
+fi
 
 echo "[I] release: ${AUTOMATION_RELEASE} container: ${CONTAINER_NAME} "${CURRENT_RELEASE:+" (current: ${CURRENT_RELEASE})"}
 
