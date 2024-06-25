@@ -1,6 +1,138 @@
 #!/usr/bin/bash
 
 
+if [[ ${DEV_MODE} == true ]]
+then
+        if [[ -d /${GIT_HOME}/${USER}/GIT ]]
+        then
+                GIT_LOCAL="/{GIT_HOME}/${USER}/GIT"
+                GIT_MOUNT="/home/ansible/GIT"
+        else
+                GIT_LOCAL="/${GIT_HOME}/${USER}/git"
+                GIT_MOUNT="/home/ansible/git"
+        fi
+
+        CONTAINER_MOUNTS+=("-v ${AUTOMATION_PATH}:/home/ansible/_automation:Z")
+
+        if [[ ${AUTOMATION_UPDATE} == false ]]
+        then
+                EXTRA_EXEC_OPTIONS+=( -e "SKIP_AUTO_SETUP=${SKIP_AUTO_SETUP}" )
+        fi
+
+        if [[ -s ~/.automation-environment-dev.env || -s .automation-environment.env ]]
+        then
+                [[ -s ~/.automation-environment-dev.env ]] && \
+                        echo "[I] Adding ENV vars from ~/.automation-environment.env"
+
+                [[ -s .automation-environment-dev.env && $PWD != $HOME ]]
+                        echo "[I] Adding ENV vars from .automation-environment.env"
+
+                while read
+                do
+                        [[ -z ${REPLY} ]] && continue
+
+                        if [[ ${REPLY} == @(CONTAINER_*) ]]
+                        then
+                                eval export ${REPLY}
+                        else
+                                EXTRA_EXEC_OPTIONS+=( -e "${REPLY}" )
+                                echo "[I] -> ${REPLY}"
+                        fi
+
+                done < <( grep -hv ^# ~/.automation-environment-dev.env .automation-environment-dev.env 2>/dev/null | sort -u  )
+        fi
+
+        if [[ ${EXPOSE_PODMAN} == true ]]
+        then
+                #PODMAN_SOCKET=$(  podman info | awk '/remoteSocket:/,/^$/  { if ( $1 ~ /path/) {  print $2; exit } }' )
+                echo "[I] Test podman with : curl  --unix-socket /home/ansible/podman.sock http://d/v1.24/images/json"
+
+                PODMAN_SOCKET="${GIT_LOCAL}/podman.sock"
+
+                if [[ ! -s ${PODMAN_SOCKET} ]]
+                then
+                        echo "[I] starting podman api"
+                        podman system service --timeout 3600 unix://${PODMAN_SOCKET} &
+
+                        sleep 2
+                fi
+
+                CONTAINER_MOUNTS+=("-v ${PODMAN_SOCKET}:/home/ansible/podman.sock:Z")
+                VOLUME_PATH=$( podman info | awk '/volumePath/ { print $2}' )
+                CONTAINER_MOUNTS+=("-v ${VOLUME_PATH}:${VOLUME_PATH}:Z")
+                EXTRA_RUN_OPTIONS+=( --security-opt label=disable )
+        fi
+
+        CONTAINER_MOUNTS+=("-v ${GIT_LOCAL}:${GIT_MOUNT}:Z")
+        EXTRA_EXEC_OPTIONS+=( -e "PATH=${GIT_MOUNT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" )
+        EXTRA_EXEC_OPTIONS+=( -e "ANSIBLE_ROLES_PATH=/home/ansible/_automation/automation/roles:${GIT_MOUNT}/roles" )
+
+
+        if touch ${GIT_LOCAL}/.histfile_${CONTAINER_NAME}
+        then
+                EXTRA_EXEC_OPTIONS+=( -e "HISTFILE=${GIT_MOUNT}/.histfile_${CONTAINER_NAME}" )
+        else
+                echo "** WARNING ** unable to save shell history."
+        fi
+
+        AUTOMATION_INVENTORY=${AUTOMATION_INVENTORY:-''}
+
+        if [[ -n ${AUTOMATION_INVENTORY} ]]
+        then
+                if [[ ${AUTOMATION_INVENTORY} != @(/*) ]]
+                then
+                        AUTOMATION_INVENTORY="/home/ansible/_automation/inventory/${AUTOMATION_INVENTORY}"
+                fi
+
+        elif [[ -s ${AUTOMATION_INV_FILE} ]]
+        then
+                if (( $( grep -vc "^#" ${AUTOMATION_INV_FILE} ) > 1 ))
+                then
+                        echo -e "\n[I] Inventory Selection required:\n"
+                        PS3='[P] Select Inventory : '
+
+                        select AUTOMATION_INVENTORY in $( cat ${AUTOMATION_INV_FILE} )
+                        do
+                                break
+                        done
+                else
+                        AUTOMATION_INVENTORY="$( < ${AUTOMATION_INV_FILE} )"
+                fi
+
+                if [[ ${AUTOMATION_INVENTORY} != @(/*) ]]
+                then
+                        AUTOMATION_INVENTORY="/home/ansible/_automation/inventory/${AUTOMATION_INVENTORY}"
+                fi
+        fi
+
+        if [[ -n ${AUTOMATION_INVENTORY} ]]
+        then
+                EXTRA_EXEC_OPTIONS+=( -e "ANSIBLE_INVENTORY=${AUTOMATION_INVENTORY}" )
+        fi
+else
+        if [[ -s ~/.automation-environment.env || -s .automation-environment.env ]]
+        then
+                [[ -s ~/.automation-environment.env ]] && \
+                        echo "[I] Adding ENV vars from ~/.automation-environment.env"
+
+                [[ -s .automation-environment.env && $PWD != $HOME ]]
+                        echo "[I] Adding ENV vars from .automation-environment.env"
+
+                while read
+                do
+                        [[ -z ${REPLY} ]] && continue
+
+                        if [[ ${REPLY} == @(CONTAINER_*) ]]
+                        then
+                                eval export ${REPLY}
+                        else
+                                EXTRA_EXEC_OPTIONS+=( -e "${REPLY}" )
+                                echo "[I] -> ${REPLY}"
+                        fi
+
+                done < <( grep -hv ^# ~/.automation-environment.env .automation-environment.env 2>/dev/null )
+        fi
+fi
 
 if [[ -z ${name} ]]
 then
