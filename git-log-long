@@ -1,0 +1,3 @@
+#!/bin/bash
+
+exec git log --oneline --format="%ce %ct %h %s"
