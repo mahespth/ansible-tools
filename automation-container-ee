@@ -1,5 +1,97 @@
 #!/usr/bin/bash
 
+# Setup/update automation & execution environment used
+# with aap/tower.
+#------------------------------------------------------------
+
+ProgName=$( basename $0 )
+DirName=$( dirname $0 ); [[ $DirName == '.' ]] && DirName=$PWD
+
+AUTOMATION_INV_FILE=".automation-environment-inventory"
+
+# Story name for JIRA
+if [[ $( basename ${DirName} ) == @(${PROJECT-:'PR'}-*) ]]
+then
+        STORY_NAME="$( basename ${DirName} )"
+        STORY_PATH=true
+fi
+
+function f_usage
+{
+        if [[ -n $1 ]]
+        then
+                ERC=$1; shift
+                [[ -n $1 ]] && echo -e "error: $*\n"
+        fi
+
+        cat <<-EOF
+        Create and login to automation environment.
+
+        usage: ${ProgName} [-D] [-E] [-1] [-c suffix] [-i inventory] [-V release] [-S storyname ][-p path] [-u url] [-d] [-A] [-a] [-r]
+               ${ProgName} [-V release] [-p path] [[-R] | [-C [all|running|stopped]] | [-L]] [playbook.yml]
+
+            -1  Select previous prelease
+            -c  container suffix for creating multiple containers
+            -V  select specific release
+            -p  path to store release (not compatible with -1 or -V)
+            -E  Expose podman socket
+            -D  Enable developer mode
+                Mount your /${GIT_USER:-'git'}/$USER/{GIT,git} folder
+                add to your GIT/roles to ANSIBLE_ROLES_PATH
+                add GIT/bin to PATH
+            -i  inventory
+            -u  alternative URL for automation setup playbook
+            -A  do not download/update the automation (default is to download/update)
+            -a  Call Azure Login
+            -r  Refresh container (stop/remove and re-create)
+            -P  Add container priviledged mode (--privileged=true)
+            -U  Alternative container URI
+            -l  Login user
+            -K  Forward KRB5 Cache (${KRB5CCNAME-:'Not Used'})
+            -X  Set ANSIBLE_LOG_PATH to host \$HOME/ansible-log
+            -S  Story name (used in the container and to store logs etc)
+
+            -R  Remove container and automation environment
+            -C  Container cleanup
+            -L  List automation containers
+
+        example:
+            # Start the previous version of the container and call azure login
+            ${ProgName} -1 -a
+
+            # Start the previous version of the container and do not update inventories
+            ${ProgName} -1 -A
+
+            Example automation-environment-dev.env
+                #
+                ANSIBLE_VAULT_PASSWORD_FILE=\\~/GIT/.ansible.vault
+                ANSIBLE_ENABLE_TASK_DEBUGGER=False
+                ANSIBLE_DISPLAY_ARGS_TO_STDOUT=True
+                ANSIBLE_VERBOSITY=1
+                ANSIBLE_LOCALHOST_WARNING=False
+                MYVIMRC=\\~/GIT/.vimrc
+
+                # Re-order to prevent warnings as Amadeus always use ini to date
+                # ------------------------------------------------------------
+                ANSIBLE_INVENTORY_ENABLED=ini,yaml,script,host_list,auto
+
+                # Add vi keys as the default to the login shell
+                CONTAINER_SHELL_OPTIONS="-o vi"
+        EOF
+
+        if [[ -s ${AUTOMATION_INV_FILE} ]]
+        then
+                echo "Available Inventories: (${AUTOMATION_INV_FILE})"
+                grep -v "^#" ${AUTOMATION_INV_FILE} | awk '{ print "\t"$0 }'
+        fi
+
+        if [[ -n $1 ]]
+        then
+                exit ${ERC}
+        fi
+}
+
+
 # Process args
 #------------------------------------------------------------
 while getopts :dLKPDXEp:u:l:n:U:S:i:C:aArRc:V:1 OPT
