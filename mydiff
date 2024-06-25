@@ -1,0 +1,3 @@
+#!/bin/bash
+
+exec diff -W $( tput col ) --suppress-common-lines --color=always --left-column -syr -x .git\* $*
