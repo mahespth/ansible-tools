@@ -1,5 +1,162 @@
 #!/usr/bin/bash
 
+# Process args
+#------------------------------------------------------------
+while getopts :dLKPDXEp:u:l:n:U:S:i:C:aArRc:V:1 OPT
+do
+        case $OPT in
+         1)     PREVIOUS_RELEASE=true
+                ;;
+         K)     if [[ -n ${KRB5CCNAME} && ${KRB5CCNAME} == @(FILE:*) ]]
+                then
+                        FORWARD_KRB5=true
+                fi
+                ;;
+         P)     PRIV_TRUE="--privileged=true"
+                ;;
+         n)     CONTAINER_NS_ID=${OPTARG}
+                ;;
+         c)     CONTAINER_SUFFIX=$OPTARG
+                ;;
+         E)     EXPOSE_PODMAN=true
+                ;;
+         C)     CONTAINER_CLEANUP=${OPTARG:-'stopped'}
+                ;;
+         i)     AUTOMATION_INVENTORY=${OPTARG}
+                ;;
+         L)     CONTAINER_LIST=true
+                ;;
+         S)     STORY_NAME="${OPTARG}"
+                ;;
+         U)     CONTAINER_URI=${OPTARG}
+                ;;
+         V)     if [[ ${OPTARG} == @(*:*) ]]
+                then
+                        CONTAINER_SELECTED=true
+                        AUTOMATION_RELEASE=${OPTARG%%:*}
+                        CONTAINER_VERSION==${OPTARG##*:}
+                else
+                        AUTOMATION_RELEASE=${OPTARG}
+                fi
+                ;;
+         p)     AUTOMATION_PATH=${OPTARG}
+                ;;
+         u)     AUTOMATION_URL=${OPTARG}
+                ;;
+         d)     DEBUG=true;
+                export PS4='$LINENO | $@ | '
+                set -x
+                ;;
+         A)     AUTOMATION_UPDATE=false
+                ;;
+         D)     DEV_MODE=true
+                SKIP_AUTO_SETUP=true
+                ;;
+         [a])   AZ_LOGIN=true
+                ;;
+         r)     POD_REMOVE=true
+                ;;
+         l)     [[ -z ${OPTARG} ]] && f_usage 1
+
+                LOGIN_USER=${OPTARG}
+                EXTRA_EXEC_OPTIONS+=( "-u ${OPTARG}" )
+                ;;
+         X)     LOCAL_ANSIBLE_LOG=true
+
+                if [[ -n ${STORY_NAME} && ${STORY_PATH} == true ]]
+                then
+                        LOCAL_ANSIBLE_LOG_PATH=$PWD
+                else
+                        LOCAL_ANSIBLE_LOG_PATH=${LOCAL_ANSIBLE_LOG_PATH:-"$HOME/ansible-log"}
+                fi
+                ;;
+         R)     POD_REMOVE=true
+                REMOVE_ONLY=true
+                AUTOMATION_UPDATE=false
+                ;;
+         \?|*)  f_usage 1 "unknown flags selected"
+                ;;
+        esac
+done
+
+shift $(( $OPTIND-1 ))
+
+if [[ -n $1 ]]
+then
+        for param in $*
+        do
+                if [[ ${param} != @(*.yml|*.yaml) ]]
+                then
+                        f_usage 0
+                fi
+        done
+fi
+
+
+RUNNING_CONTAINER_COUNT=$( \
+        podman \
+                ps -a \
+                --format '{{.Names}}\t{{.State}}\t{{.Mounts}}' \
+                --sort=created \
+        | grep -c "_automation" \
+        )
+
+if [[ ${CONTAINER_LIST} != true && ${RUNNING_CONTAINER_COUNT} -gt 2 ]]
+then
+        echo "[W] You currently have ${RUNNING_CONTAINER_COUNT} containers."
+
+        podman \
+                ps -a \
+                --format '{{.Names}}\t{{.State}}\t{{.Mounts}}' \
+                --sort=created \
+        | awk '/_automation/ { print "[W]\t"$0 }'
+
+        echo ""
+fi
+
+if [[ ${CONTAINER_LIST} == true ]]
+then
+        podman \
+                ps -a \
+                --format '{{.Names}}\t{{.State}}\t{{.Mounts}}' \
+                --sort=created \
+        | grep "_automation"
+
+        exit
+fi
+
+if [[ -n ${CONTAINER_CLEANUP} ]]
+then
+        if [[ ${CONTAINER_CLEANUP,,} ==  @(all|running|stopped) ]]
+        then
+                CONTAINERS=$(
+                        if [[ ${CONTAINER_CLEANUP,,} != 'all' ]]
+                        then
+                                podman \
+                                        ps -a \
+                                        --format '{{.Names}}\t{{.State}}\t{{.Mounts}}' \
+                                        --sort=created \
+                                        --filter "status=${CONTAINER_CLEANUP,,}" \
+                                | awk '/_automation/ { print $1 }'
+                        else
+                                podman \
+                                        ps -a \
+                                        --format '{{.Names}}\t{{.State}}\t{{.Mounts}}' \
+                                        --sort=created \
+                                | awk '/_automation/ { print $1 }'
+                        fi
+                        )
+                for CONTAINER in ${CONTAINERS}
+                do
+                        echo "todo : remove: ${CONTAINER}"
+                done
+        else
+                f_usage 3 "unknown type passed to cleanup (-C) flag."
+        fi
+
+        exit
+fi
+
 DEV_MODE=${DEV_MODE:-false}
 REPO_URL=${REPO_URL:-'https://github.com/mahespth/repos'}
 AZ_LOGIN="${AZ_LOGIN:-false}"
