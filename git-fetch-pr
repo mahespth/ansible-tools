@@ -1,0 +1,18 @@
+#!/bin/bash
+
+working_tree=$( git rev-parse --is-inside-work-tree )
+
+if [[ $working_tree != true ]]
+then
+        echo "error: please run from the root of your git project." 2>&1
+        exit 1
+fi
+
+if ! git config --get remote.origin.fetch | grep -q pull-requeust >/dev/null
+then
+        git config --add remote.origin.fetch '+refs/pull-requests/*/from:refs/remotes/upstream/pull-requests/*'
+fi
+
+git fetch && git branch -a
+
+exit $?
