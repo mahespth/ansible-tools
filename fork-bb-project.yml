@@ -1,0 +1,52 @@
+---
+
+- hosts: localhost
+  gather_facts: false
+  become: false
+  connection: local
+
+  vars:
+    bitbucket_group: REDHAT
+    pb_user: "{{ lookup('pipe','whoami') }}"
+    pb_home: "{{ lookup('env','HOME') }}"
+    dest: "/{{ GIT_HOME }}/{{ pb_user }}/GIT/roles/{{ repos }}"
+    bitbucket_url: "https://bb.redhat.com/git/rest/api/latest"
+    bb_url: "{{ bitbucket_url }}/projects/{{ bitbucket_group }}/repos/{{ repos }}"
+
+  tasks:
+    - assert:
+        that:
+          - repos is defined
+          - repos | length > 2
+        fail_msg: "ooops, no repos"
+
+    - name: "Include vars for access"
+      no_log: true
+      include_vars:
+        file: "{{ '{}/.ansible_vars_{}.yml'.format( pb_home, pb_user ) }}"
+      when: bitbucket_password is undefined
+      
+    - name: 'Fork a respository'
+      uri:
+        url: "{{ bb_url }}"
+        method: POST
+        status_code: [200,201,409]
+        user: "{{ bitbucket_user }}"
+        password: "{{ bitbucket_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ target_repos if target_repos is defined else repos }}"
+          scm: "git"
+          is_private: false
+      register: fork_result
+      
+    - name: 'GIT Clone'
+      git:
+        repo: "https://{{ bitbucket_user }}:{{ bitbucket_password }}bb.redhat.com/git/scm/~{{ bitbucket_user }}/{{ repos }}.git"
+        dest: "{{ dest }}"
+
+
+# to do - download multiple or all from the project (see top level jason)
+# unfork - remove the fork in bitbucket
+# resync - force sync of forks
