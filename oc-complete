@@ -1,0 +1,5 @@
+#!/usr/bin/
+
+(( $SHLVL > 1 )) && echo 'error: Ensure you source this file !!!' >&2 && exit 1
+
+source <( oc completion bash )
