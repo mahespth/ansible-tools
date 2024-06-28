@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# vim:ts=2:syntax=sh:ai:number
+
+# Where are we
+#------------------------------------------------------------
+
+while :
+do
+  [[ -d molecule ]] && break
+
+  if [[ $PWD == $HOME ]]
+  then
+    echo "error: could not find molecule path" >&2
+    exit 1
+   fi
+
+  cd ..
+done
+
+molecule list \
+| awk '$3 ~ "ansible" && $5 ~ "true" { print $1,$4 }' \
+| while read a b
+do
+  Config=~/.cache/molecule/$( basename $PWD )/$b/instance_config.yml
+
+   awk -F':' '/address|instance|user|identity_file/ { print $2 }' $Config  \
+   | paste - - - - \
+   | awk -v file="$1" \
+     '{ print "scp -o user="$4" -i "$2" "file" "$1":/tmp/." }'
+
+   if [[ ! -z $2 ]]
+   then
+    awk -F':' '/address|instance|user|identity_file/ { print $2 }' $Config  \
+     | paste - - - - \
+     | awk -v file="$( basename $1 )" -v dest="$2" \
+      '{ print "ssh -o user="$4" -i "$2" "$1" sudo cp /tmp/"file" "dest }'
+   fi
+
+done \
+| sort -u
