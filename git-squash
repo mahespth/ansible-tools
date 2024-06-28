@@ -1,0 +1,31 @@
+#!/bin/bash
+# vim:ts=4:syntax:number:cursorline:cuc
+
+while getopts n:m: OPT
+do
+    case ${OPT} in
+      n)    numberOfDays=${OPTARG};;
+      m)    message="${OPTARG}";;
+    esac
+done
+
+numberOfDays=${numberOfDays:-4}
+
+commiterAddress=$( git config --get user.email )
+
+if [[ -z ${commiterAddress} ]]
+then
+    echo "error: could not find git users email address." >&2
+    exit 1
+fi
+
+commitList=()
+
+commitList=( $( git log --pretty=format:"%h" --since "${numberOfDate} days ago" ) )
+
+#git log --pretty=format:"%h" --since "${numberOfDate} days ago"
+
+git reset --soft HEAD~${#commitList[-1]}
+git commit --amend -m "${message}"
+
+exit $?
