@@ -108,3 +108,15 @@
         track_submodules: yes
       environment:
         https_proxy: http://proxy.xxxxxxx.com/
+
+# .myvimrc
+#execute pathogen#infect()
+#set cuc
+#set cursorline
+#autocmd FileType yaml setlocal ai ts=2 sw=2 et nu
+#autocmd FileType yml setlocal ai ts=2 sw=2 et nu
+#autocmd FileType yaml color zellner
+#autocmd FileType yml color zellner
+#colorscheme zellner
+#syntax on
+#filetype plugin indent on
