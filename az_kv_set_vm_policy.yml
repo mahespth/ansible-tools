@@ -1,0 +1,46 @@
+#!/usr/bin/env ansible-playbook
+
+# smaher@redhat.com
+
+# Example of adding access to a KV access to a VM using CLI 
+# and not module.
+
+- hosts: localhost
+  gather_facts: false
+
+  tasks:
+  
+    - block:
+        - name: "Obtain Service Principal information."
+          command: >
+            az resource
+              list
+                --resource-group "{{ az_resource_group }}"
+                --name "{{ azure_vm }}"
+                --query  "[].identity.principalId"
+                --output tsv
+          register: __az_vm_principalId
+          changed_when: false
+  
+        - name: "Obtain the current keyvault access for the Service Principal."
+          command: >
+            az keyvault
+              show
+                --name "{{ az_vault_name }}"
+                --resource-group "{{ az_resource_group }}"
+                --query 'properties.accessPolicies[?objectId == `{{ __az_vm_principalId.stdout }}`].permissions.secrets[]'
+                --output tsv
+          register: __az_vm_keyvault_access
+          changed_when: false
+  
+        - name: "Modify the Key Vault access for VM."
+          command: >
+            az keyvault set-policy
+                --name "{{ az_vault_name }}"
+                --resource-group "{{ az_resource_group }}"
+                --object-id "{{ __az_vm_principalId.stdout }}"
+                --secret-permissions "{{ az_vm_policy_secret_permissions | sort | join }}"
+          register: __result
+          when: >
+            (      __az_vm_keyvault_access.stdout.split() | sort | join )
+              != ( az_vm_policy_secret_permissions | sort | join )
