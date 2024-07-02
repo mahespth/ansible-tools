@@ -1,0 +1,54 @@
+#!/usr/bin/env ansible-playbook
+
+# smaher@redhat.com
+#
+# Example adding a SP to a Keyvault for a given RG
+##############################################################
+
+- name: "Service Principal Access for a AZ Keyvault example."
+  delegate_to: "localhost"
+  run_once: true
+  become: false
+
+  tasks:
+    - name: "SP Access for AZ KV"
+      register: __result
+      when: >
+        ( __az_sp_keyvault_access.stdout | from_json | sort | join )
+        != ( az_sp_policy_secret_permissions | sort | join )
+       block:
+          - name: "Get application id of the SP"
+            command: >
+              az account show --query "user.name" --output "tsv"
+            register: _az_app_id
+            changed_when: false
+      
+          - name: "Get object id for the enterprise application service principal"
+            command: >
+              az rest --method "get"
+                --uri "https://graph.microsoft.com/v1.0/servicePrincipals"
+                --url-parameters "$filter=appId eq '{{ __az_app_id.stdout }}'" "$select=id"
+                --query "value[].id" --output "tsv"
+            register: ___az_object_id
+            changed_when: false
+      
+          - name: "Lookup the keyvault access for the service principle"
+            command: >
+              az keyvault
+                show
+                  --name "{{ az_vault_name }}"
+                  --resource-group "{{ az_resource_group }}"
+                  --query
+                    'properties.accessPolicies[?objectId == `{{ __az_object_id.stdout }}`].permissions.secrets[]'
+                  --output json
+            register: __az_sp_keyvault_access
+            changed_when: false
+      
+          - name: "Limit the keyvault access for SP"
+            command: >
+              az keyvault set-policy
+                  --name "{{ az_vault_name }}" --resource-group "{{ az_resource_group }}"
+                  --object-id "{{ __az_object_id.stdout }}"
+                  --secret-permissions "{{ az_sp_policy_secret_permissions | join(' ') }}"
+    
+...
