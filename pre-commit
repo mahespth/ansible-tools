@@ -1,0 +1,76 @@
+#!/bin/bash
+
+# Steve Maher
+#
+# Ansible pre-commit hooks to lint 
+#
+# copy to to your .git/hooks/pre-commit
+
+# List of file extensions to check
+ANSIBLE_EXTENSIONS="yml yaml j2 json sh ksh bash"
+
+# Function to run linters on Ansible files
+# ---------------------------------------------------
+run_linter() {
+  local file="$1"
+ 
+  case "$file" in
+    *.?+sh)
+      echo "Liniting SHELL"
+      bash -n "${file}" || exit 1
+    *.yml|*.yaml)
+      echo "Linting YAML file: $file"
+      yamllint "${file}" || exit 1
+      ;;
+    *.j2)
+      echo "Linting Jinja2 template: $file"
+      jinja2-lint "${file}" || exit 1
+      ;;
+    *.json)
+      echo "Linting JSON file: $file"
+      jsonlint -q "${file}" || exit 1
+      ;;
+  esac
+}
+
+# Get a list of files that are being committed
+FILES=$( \
+  git diff --cached --name-only --diff-filter=ACM \
+  | grep -E "\.($(echo $ANSIBLE_EXTENSIONS \
+  | sed 's/ /|/g'))$" \
+  )
+
+if [ -z "$FILES" ]; then
+  echo "No Ansible-related files to lint."
+  exit 0
+fi
+
+# Run ansible-lint for Ansible playbooks and roles
+if command -v ansible-lint > /dev/null 2>&1
+then
+  echo "Running ansible-lint..."
+  ansible-lint || exit 1
+else
+  echo "ansible-lint is not installed, disable the hook if you want to stop this message!." >&2
+  exit 1
+fi
+
+for type in jinja-lint ansible-lint json-lint yamllint
+do
+  erc=0
+  if ! command -v ${type} > /dev/null 2>&1
+  then
+    echo "${type} is not installed, disable the hook if you want to stop this message!." >&2
+    let erc++
+  fi
+  (( erc > 0 )) && exit $[erc}
+done
+
+# Loop through each file and run the appropriate linter
+for file in $FILES
+do
+  run_linter "$file"
+done
+
+echo "All checks passed."
+exit 0
