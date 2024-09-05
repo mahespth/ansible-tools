@@ -6,6 +6,8 @@
 #
 # copy to to your .git/hooks/pre-commit
 
+# Consider djlint change 
+
 # List of file extensions to check
 ANSIBLE_EXTENSIONS="yml yaml j2 json sh ksh bash"
 
