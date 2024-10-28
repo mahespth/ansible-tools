@@ -1,0 +1,130 @@
+flowchart TB
+ subgraph Site_1_Controllers["Controllers"]
+        s1_aap_controller_1["Controller 1"]
+        s1_aap_controller_2["Controller 2"]
+        s1_aap_controller_3["Controller 3"]
+  end
+ subgraph Managed_Hosts["Managed Hosts"]
+        m1_vm["vm1"]
+        m2_vm["vm2"]
+        m3_esx["esx"]
+        m4_pc1["i686"]
+  end
+ subgraph Site_1_ExecNode["Execution Nodes"]
+        s1_aap_ExecNode_1["ExecNode 1"]
+        s1_aap_ExecNode_2["ExecNode 2"]
+        s1_aap_ExecNode_3["ExecNode 3"]
+  end
+ subgraph Site_1_PrivHub["Private Hub"]
+        s1_aap_PrivHub_1["Hub 1"]
+        s1_aap_PrivHub_2["Hub 2"]
+        s1_aap_PrivHub_3["Hub 3"]
+  end
+ subgraph Site_1_EDA["Event Driven Ansible"]
+        s1_eda_1["EDA"]
+        s1_eda_2["EDA"]
+        s1_eda_3["EDA"]
+  end
+ subgraph Site_1_DB["Database Cluster"]
+        s1_db_1["Postgres Database"]
+        s1_db_2["Postgres Database"]
+  end
+ subgraph Site_1["Site 1"]
+        Site_1_Controllers
+        Site_1_ExecNode
+        Site_1_PrivHub
+        Site_1_EDA
+        Site_1_DB
+  end
+ subgraph Site_2_Controllers["Controllers"]
+        s2_aap_controller_1["Controller 1"]
+        s2_aap_controller_2["Controller 2"]
+        s2_aap_controller_3["Controller 3"]
+  end
+ subgraph Site_2_ExecNode["Execution Nodes"]
+        s2_aap_ExecNode_1["ExecNode 1"]
+        s2_aap_ExecNode_2["ExecNode 2"]
+        s2_aap_ExecNode_3["ExecNode 3"]
+  end
+ subgraph Site_2_PrivHub["Private Hub"]
+        s2_aap_PrivHub_1["Hub 1"]
+        s2_aap_PrivHub_2["Hub 2"]
+        s2_aap_PrivHub_3["Hub 3"]
+  end
+ subgraph Site_2_EDA["Event Driven Ansible"]
+        s2_eda_1["EDA"]
+        s2_eda_2["EDA"]
+        s2_eda_3["EDA"]
+  end
+ subgraph Site_2_DB["Database Cluster"]
+        s2_db_1["Postgres Database"]
+        s2_db_2["Postgres Database"]
+  end
+ subgraph Site_2["Site 2"]
+        Site_2_Controllers
+        Site_2_ExecNode
+        Site_2_PrivHub
+        Site_2_EDA
+        Site_2_DB
+  end
+  
+    s1_aap_controller_1 --- s1_aap_controller_2
+    s1_aap_controller_2 --- s1_aap_controller_3
+    s1_aap_ExecNode_1 --- s1_aap_ExecNode_2
+    s1_aap_ExecNode_2 --- s1_aap_ExecNode_3
+    s1_aap_PrivHub_1 --- s1_aap_PrivHub_2
+    s1_aap_PrivHub_2 --- s1_aap_PrivHub_3
+    s1_eda_1 --- s1_eda_2
+    s1_eda_2 --- s1_eda_3
+    s1_db_1 <-- Cluster (RR DNS) --> s1_db_2
+    Site_1_Controllers --- Site_1_ExecNode & Site_1_DB & GITLAB["GITLAB"]
+    Site_1_ExecNode --- Site_1_PrivHub
+    Site_1_PrivHub --- Site_1_DB & GITLAB
+    Site_1_EDA --- Site_1_DB & Site_1_Controllers
+    s2_aap_controller_1 --- s2_aap_controller_2
+    s2_aap_controller_2 --- s2_aap_controller_3
+    s2_aap_ExecNode_1 --- s2_aap_ExecNode_2
+    s2_aap_ExecNode_2 --- s2_aap_ExecNode_3
+    s2_aap_PrivHub_1 --- s2_aap_PrivHub_2
+    s2_aap_PrivHub_2 --- s2_aap_PrivHub_3a
+    s2_eda_1 --- s2_eda_2
+    s2_eda_2 --- s2_eda_3
+    s2_db_1 <-- Cluster (RR DNS) --> s2_db_2
+
+    Site_2_Controllers -- Port ?? ---> Site_2_ExecNode
+    Site_2_Controllers -- Port 5423 ---> Site_2_DB
+    Site_2_Controllers -- Port ?? --> Site_2_ExecNode
+    Site_2_Controllers -- Port 23 / 443 -->  GITLAB
+
+    Site_2_ExecNode --- Site_2_PrivHub
+    
+    Site_2_PrivHub -- Port 5423 ---> Site_2_DB
+    Site_2_PrivHub -- Port 23 / 443 ---> GITLAB
+    
+    Site_2_EDA -- Port 5423 ---> Site_2_DB 
+    Site_2_EDA -- Port 80 / 443 ---> Site_2_Controllers
+
+
+    Site_1_PrivHub -- Port 443 --> RHCND["cdn.quay.io"]@{ shape: disk }
+    Site_2_PrivHub -- Port 443 --> RHCND["cdn.quay.io"]@{ shape: disk }
+
+
+
+    OPERATORS["Operators / Users"] -- Port 443 --- Site_1_Controllers & Site_2_Controllers
+
+    direction TB
+
+    Site_2_DB <---> DBCLUSTER["DBCLUSTER TBC"]
+    Site_1_DB <---> DBCLUSTER
+    Site_1_ExecNode -- Port 23  --> Managed_Hosts
+    Site_2_ExecNode -- Port 23 --> Managed_Hosts
+
+    s1_db_1@{ shape: db}
+    s1_db_2@{ shape: db}
+    s2_db_1@{ shape: db}
+    s2_db_2@{ shape: db}
+    GITLAB@{ shape: disk}
+    
+    
+    classDef db fill:#f96,stroke:#333,stroke-width:2px;
+    classDef disk fill:#ccf,stroke:#333,stroke-width:2px;
