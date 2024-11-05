@@ -1,0 +1,61 @@
+---
+
+# Steve Maher: AAP Create a VM Customization.
+
+- name: Create VM Customization Specification in vCenter using REST API
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vcenter_hostname: "your_vcenter_server"
+    vcenter_username: "your_vcenter_username"
+    vcenter_password: "your_vcenter_password"
+    custom_spec_name: "CustomSpecExample"
+    description: "Customization spec created by Ansible using vmware_rest"
+    domain: "example.com"
+    dns_servers: ["8.8.8.8", "8.8.4.4"]
+    ip_address: "192.168.1.100"
+    subnet_mask: "255.255.255.0"
+    gateway: ["192.168.1.1"]
+
+  tasks:
+    - name: Log in to vCenter using REST API
+      vmware.vmware_rest.rest_login:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: no
+      register: login_result
+
+    - name: Create a VM customization specification
+      vmware.vmware_rest.rest_request:
+        hostname: "{{ vcenter_hostname }}"
+        method: POST
+        validate_certs: no
+        path: "/vcenter/guest/customization-specs"
+        headers:
+          vmware-api-session-id: "{{ login_result.vmware_api_session_id }}"
+        data:
+          name: "{{ custom_spec_name }}"
+          description: "{{ description }}"
+          spec:
+            identity:
+              sysprep:
+                hostName:
+                  type: FIXED
+                  name: "{{ custom_spec_name }}"
+                userData:
+                  fullName: "Ansible User"
+                  orgName: "Ansible Organization"
+            globalIPSettings:
+              dnsServerList: "{{ dns_servers }}"
+              dnsSuffixList: ["{{ domain }}"]
+            nicSettingMap:
+              - adapter:
+                  ip: "{{ ip_address }}"
+                  subnetMask: "{{ subnet_mask }}"
+                  gateway: "{{ gateway }}"
+
+    - name: Log out of vCenter
+      vmware.vmware_rest.rest_logout:
+        hostname: "{{ vcenter_hostname }}"
+        vmware_api_session_id: "{{ login_result.vmware_api_session_id }}"
