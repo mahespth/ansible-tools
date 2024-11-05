@@ -1,0 +1,66 @@
+---
+- name: Create Linux VM Customization Specification in vCenter with London timezone and custom script using REST API
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vcenter_hostname: "your_vcenter_server"
+    vcenter_username: "your_vcenter_username"
+    vcenter_password: "your_vcenter_password"
+    custom_spec_name: "LinuxCustomSpecWithScript"
+    description: "Linux customization spec with London timezone and custom script, created by Ansible using uri"
+    domain: "example.com"
+    dns_servers: ["8.8.8.8", "8.8.4.4"]
+    ip_address: "192.168.1.100"
+    subnet_mask: "255.255.255.0"
+    gateway: ["192.168.1.1"]
+    timezone: "Europe/London"
+    custom_script_path: "/etc/custom.sh"
+
+  tasks:
+    - name: Obtain a session ID for vCenter
+      uri:
+        url: "https://{{ vcenter_hostname }}/rest/com/vmware/cis/session"
+        method: POST
+        user: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: no
+      register: login_result
+      no_log: true
+
+    - name: Create a Linux VM customization specification with timezone and custom script
+      uri:
+        url: "https://{{ vcenter_hostname }}/rest/vcenter/guest/customization-specs"
+        method: POST
+        headers:
+          vmware-api-session-id: "{{ login_result.json.value }}"
+        validate_certs: no
+        body_format: json
+        body:
+          name: "{{ custom_spec_name }}"
+          description: "{{ description }}"
+          spec:
+            identity:
+              linuxPrep:
+                domain: "{{ domain }}"
+                hostName:
+                  type: FIXED
+                  name: "{{ custom_spec_name }}"
+                timeZone: "{{ timezone }}"
+                postInstallScript: "{{ custom_script_path }}"
+            globalIPSettings:
+              dnsServerList: "{{ dns_servers }}"
+              dnsSuffixList: ["{{ domain }}"]
+            nicSettingMap:
+              - adapter:
+                  ip: "{{ ip_address }}"
+                  subnetMask: "{{ subnet_mask }}"
+                  gateway: "{{ gateway }}"
+      register: create_spec_result
+
+    - name: Log out of vCenter
+      uri:
+        url: "https://{{ vcenter_hostname }}/rest/com/vmware/cis/session"
+        method: DELETE
+        headers:
+          vmware-api-session-id: "{{ login_result.json.value }}"
+        validate_certs: no
