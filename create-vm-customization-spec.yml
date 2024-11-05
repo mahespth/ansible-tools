@@ -39,13 +39,11 @@
           description: "{{ description }}"
           spec:
             identity:
-              sysprep:
+              linuxPrep:
+                domain: "{{ domain }}"
                 hostName:
                   type: FIXED
                   name: "{{ custom_spec_name }}"
-                userData:
-                  fullName: "Ansible User"
-                  orgName: "Ansible Organization"
             globalIPSettings:
               dnsServerList: "{{ dns_servers }}"
               dnsSuffixList: ["{{ domain }}"]
