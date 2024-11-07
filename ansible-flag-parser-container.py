@@ -8,6 +8,7 @@ import subprocess
 import sys
 import signal
 import re
+import tempfile
 
 def load_metadata_from_self():
     """Load metadata by reading YAML directly from the script file itself."""
@@ -52,6 +53,13 @@ def disable_ctrlc():
     """Disable CTRL+C trapping if --no-ctrlc is set."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
+def write_temp_requirements_file(galaxy_requirements):
+    """Write galaxy requirements to a temporary file and return the file path."""
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".yml")
+    with open(temp_file.name, 'w') as f:
+        yaml.dump(galaxy_requirements, f)
+    return temp_file.name
+
 def install_requirements_in_container(container_engine, container_image, requirements_file):
     """Install required Ansible roles or collections in the container."""
     command = [
@@ -88,10 +96,19 @@ def main():
     container_engine = metadata.get("container_engine", "podman")  # Default to podman if not specified
     container_image = metadata.get("container_image", "quay.io/ansible/ansible-runner")  # Default image
 
-    # Check if requirements need to be installed
-    requirements_file = metadata.get("requirements_file", None)
-    if use_container and requirements_file:
-        install_requirements_in_container(container_engine, container_image, requirements_file)
+    # Check if galaxy requirements need to be installed
+    galaxy_requirements = metadata.get("galaxy_requirements", None)
+    if galaxy_requirements:
+        requirements_file = write_temp_requirements_file(galaxy_requirements)
+
+        if use_container:
+            # Ensure requirements file is accessible to the container
+            install_requirements_in_container(container_engine, container_image, requirements_file)
+        else:
+            # Install requirements locally
+            command = ["ansible-galaxy", "install", "-r", requirements_file]
+            print("Installing Ansible requirements locally...")
+            subprocess.run(command, check=True)
 
     # Construct the command based on whether ansible-navigator or ansible-playbook is used
     if use_ansible_navigator:
@@ -117,6 +134,10 @@ def main():
         subprocess.run(command, check=True)
     except subprocess.CalledProcessError as e:
         sys.exit(e.returncode)
+    finally:
+        # Clean up the temporary requirements file if it was created
+        if galaxy_requirements and os.path.exists(requirements_file):
+            os.remove(requirements_file)
 
 if __name__ == "__main__":
     main()
@@ -143,7 +164,13 @@ use_ansible_navigator: true  # Internal option to use ansible-navigator instead 
 use_container: true           # Enable running within a container
 container_engine: "podman"     # Specify container engine (podman or docker)
 container_image: "quay.io/ansible/ansible-runner"  # Container image with Ansible installed
-requirements_file: "requirements.yml"  # Requirements file for ansible-galaxy install
+galaxy_requirements:           # Requirements to install with ansible-galaxy
+  roles:
+    - src: geerlingguy.apache
+      version: "1.0.0"
+  collections:
+    - name: community.general
+      version: "3.2.0"
 environment:
   MY_ENV_VAR: "some_value"
 ansible_options:
