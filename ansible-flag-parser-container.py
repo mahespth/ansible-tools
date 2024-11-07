@@ -8,7 +8,9 @@ import subprocess
 import sys
 import signal
 import re
+import syslog
 import tempfile
+import time
 
 def load_metadata_from_self():
     """Load metadata by reading YAML directly from the script file itself."""
@@ -60,17 +62,25 @@ def write_temp_requirements_file(galaxy_requirements):
         yaml.dump(galaxy_requirements, f)
     return temp_file.name
 
-def install_requirements_in_container(container_engine, container_image, requirements_file):
-    """Install required Ansible roles or collections in the container."""
+def install_requirements(container_engine, container_image, requirements_file, roles_dir, collections_dir):
+    """Install required Ansible roles and collections persistently in the container using shared volumes."""
     command = [
         container_engine, "run", "--rm",
+        "-v", f"{roles_dir}:/root/.ansible/roles",
+        "-v", f"{collections_dir}:/root/.ansible/collections",
         "-v", f"{os.getcwd()}:/workspace",
         "-w", "/workspace",
         container_image,
-        "ansible-galaxy", "install", "-r", requirements_file
+        "ansible-galaxy", "install", "-r", requirements_file,
+        "--roles-path", "/root/.ansible/roles",
+        "--collections-path", "/root/.ansible/collections"
     ]
-    print("Installing Ansible requirements in container...")
+    log_message("Installing Ansible requirements persistently in container...")
     subprocess.run(command, check=True)
+
+def log_message(message):
+    """Log a message to syslog based on syslog settings in the metadata."""
+    syslog.syslog(syslog_level | syslog_priority, message)
 
 def main():
     # Load metadata from the script itself
@@ -78,6 +88,18 @@ def main():
 
     # Parse arguments based on metadata
     args = parse_flags(metadata)
+
+    # Initialize syslog with specified level and priority
+    global syslog_level, syslog_priority
+    syslog_level = getattr(syslog, metadata.get("syslog_level", "LOG_INFO"))
+    syslog_priority = getattr(syslog, metadata.get("syslog_priority", "LOG_USER"))
+    syslog.openlog(logoption=syslog.LOG_PID, facility=syslog_priority)
+
+    # Log script arguments at start
+    log_message(f"Script called with arguments: {sys.argv}")
+
+    # Track start time for execution timing
+    start_time = time.time()
 
     # Disable CTRL+C trapping if --no-ctrlc is set
     if args.no_ctrlc:
@@ -96,18 +118,29 @@ def main():
     container_engine = metadata.get("container_engine", "podman")  # Default to podman if not specified
     container_image = metadata.get("container_image", "quay.io/ansible/ansible-runner")  # Default image
 
+    # Define persistent directories for Ansible roles and collections
+    requirements_dir = os.path.join(os.getcwd(), "ansible_requirements")
+    roles_dir = os.path.join(requirements_dir, "roles")
+    collections_dir = os.path.join(requirements_dir, "collections")
+    os.makedirs(roles_dir, exist_ok=True)
+    os.makedirs(collections_dir, exist_ok=True)
+
     # Check if galaxy requirements need to be installed
     galaxy_requirements = metadata.get("galaxy_requirements", None)
     if galaxy_requirements:
         requirements_file = write_temp_requirements_file(galaxy_requirements)
 
         if use_container:
-            # Ensure requirements file is accessible to the container
-            install_requirements_in_container(container_engine, container_image, requirements_file)
+            # Install requirements persistently in the container
+            install_requirements(container_engine, container_image, requirements_file, roles_dir, collections_dir)
         else:
-            # Install requirements locally
-            command = ["ansible-galaxy", "install", "-r", requirements_file]
-            print("Installing Ansible requirements locally...")
+            # Install requirements locally, specifying paths for roles and collections
+            command = [
+                "ansible-galaxy", "install", "-r", requirements_file,
+                "--roles-path", roles_dir,
+                "--collections-path", collections_dir
+            ]
+            log_message("Installing Ansible requirements locally...")
             subprocess.run(command, check=True)
 
     # Construct the command based on whether ansible-navigator or ansible-playbook is used
@@ -120,6 +153,8 @@ def main():
     if use_container:
         command = [
             container_engine, "run", "--rm",
+            "-v", f"{roles_dir}:/root/.ansible/roles",  # Mount roles dir for persistent roles
+            "-v", f"{collections_dir}:/root/.ansible/collections",  # Mount collections dir for persistent collections
             "-v", f"{os.getcwd()}:/workspace",
             "-w", "/workspace",
             container_image,
@@ -132,9 +167,15 @@ def main():
 
     try:
         subprocess.run(command, check=True)
+        result = "SUCCESS"
     except subprocess.CalledProcessError as e:
+        result = f"FAILED with exit code {e.returncode}"
         sys.exit(e.returncode)
     finally:
+        # Calculate execution time and log completion
+        execution_time = time.time() - start_time
+        log_message(f"Execution completed in {execution_time:.2f} seconds with result: {result}")
+
         # Clean up the temporary requirements file if it was created
         if galaxy_requirements and os.path.exists(requirements_file):
             os.remove(requirements_file)
@@ -171,53 +212,6 @@ galaxy_requirements:           # Requirements to install with ansible-galaxy
   collections:
     - name: community.general
       version: "3.2.0"
-environment:
-  MY_ENV_VAR: "some_value"
-ansible_options:
-  --limit: "localhost"
-  --tags: "test"
-# --- END METADATA ---
-
-# --- PLAYBOOKS ---
-# Embedded YAML playbooks
-- name: Metadata Parsing Playbook
-  hosts: localhost
-  gather_facts: no
-  vars:
-    flag1:
-      help: "First flag"
-      required: true
-    flag2:
-      help: "Second flag"
-      default: "value2"
-    no_ctrlc:
-      help: "Disable CTRL+C trapping"
-      required: false
-      default: false
-    rescuer:
-      help: "Execute rescuer playbook on failure"
-      required: false
-      default: false
-    _ansible_flag_parser: false  # Indicator that the parser has completed
-
-  tasks:
-    - name: No-op task to hold metadata
-      ansible.builtin.debug:
-        msg: "Metadata is loaded in variables."
-      when: _ansible_flag_parser is not defined or not _ansible_flag_parser
-
-- name: Main Execution Playbook
-  hosts: localhost
-  gather_facts: no
-  vars:
-    _ansible_flag_parser: true  # Set this to indicate metadata has been parsed
-
-  tasks:
-    - name: Parse Flags with Python Script
-      ansible.builtin.command: "./ansible_flag_parser.py"
-      when: not _ansible_flag_parser
-
-    - name: Main Task Execution
-      ansible.builtin.debug:
-        msg: "Executing main playbook tasks with parsed flags."
-# --- END PLAYBOOKS ---
+syslog_level: LOG_INFO         # Syslog level for logging
+syslog_priority: LOG_USER      # Syslog priority/facility
+environment
