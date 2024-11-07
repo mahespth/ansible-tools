@@ -1,0 +1,71 @@
+#!/usr/bin/env ansible-flags-parser.py
+
+
+# --- METADATA ---
+# Embedded YAML metadata defining playbooks and variables
+playbook: main_playbook.yml
+flags:
+  flag1:
+    help: "First flag"
+    required: true
+  flag2:
+    help: "Second flag"
+    default: "value2"
+  no_ctrlc:
+    help: "Disable CTRL+C trapping"
+    required: false
+    default: false
+  rescuer:
+    help: "Execute rescuer playbook on failure"
+    required: false
+    default: false
+environment:
+  MY_ENV_VAR: "some_value"
+ansible_options:
+  --limit: "localhost"
+  --tags: "test"
+# --- END METADATA ---
+
+# --- PLAYBOOKS ---
+# Embedded YAML playbooks
+- name: Metadata Parsing Playbook
+  hosts: localhost
+  gather_facts: no
+  vars:
+    flag1:
+      help: "First flag"
+      required: true
+    flag2:
+      help: "Second flag"
+      default: "value2"
+    no_ctrlc:
+      help: "Disable CTRL+C trapping"
+      required: false
+      default: false
+    rescuer:
+      help: "Execute rescuer playbook on failure"
+      required: false
+      default: false
+    _ansible_flag_parser: false  # Indicator that the parser has completed
+
+  tasks:
+    - name: No-op task to hold metadata
+      ansible.builtin.debug:
+        msg: "Metadata is loaded in variables."
+      when: _ansible_flag_parser is not defined or not _ansible_flag_parser
+
+- name: Main Execution Playbook
+  hosts: localhost
+  gather_facts: no
+  vars:
+    _ansible_flag_parser: true  # Set this to indicate metadata has been parsed
+
+  tasks:
+    - name: Parse Flags with Python Script
+      ansible.builtin.command: "./ansible_flag_parser.py"
+      when: not _ansible_flag_parser
+
+    - name: Main Task Execution
+      ansible.builtin.debug:
+        msg: "Executing main playbook tasks with parsed flags."
+# --- END PLAYBOOKS ---
