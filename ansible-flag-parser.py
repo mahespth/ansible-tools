@@ -14,6 +14,9 @@
 #. run in container :)
 #. run via ansible-navigator !! 
 #. credentials / store / secret reading ?? hsm ?? 
+#. option to run in nice but simole chui like navigator ?? operator mode 
+
+
 import argparse
 import json
 import yaml
