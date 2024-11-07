@@ -11,6 +11,7 @@ import re
 import syslog
 import tempfile
 import time
+import shutil
 
 def load_metadata_from_self():
     """Load metadata by reading YAML directly from the script file itself."""
@@ -21,9 +22,14 @@ def load_metadata_from_self():
     metadata_match = re.search(r"--- METADATA ---\n(.*?)\n--- END METADATA ---", content, re.DOTALL)
     if metadata_match:
         metadata_yaml = metadata_match.group(1)
-        return yaml.safe_load(metadata_yaml)
+        try:
+            return yaml.safe_load(metadata_yaml)
+        except yaml.YAMLError as e:
+            log_message(f"Error parsing YAML metadata: {e}")
+            sys.exit(1)
     else:
-        raise ValueError("No metadata found in the script.")
+        log_message("No metadata found in the script.")
+        sys.exit(1)
 
 def parse_flags(metadata):
     """Parse flags from the metadata."""
@@ -57,10 +63,14 @@ def disable_ctrlc():
 
 def write_temp_requirements_file(galaxy_requirements):
     """Write galaxy requirements to a temporary file and return the file path."""
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".yml")
-    with open(temp_file.name, 'w') as f:
-        yaml.dump(galaxy_requirements, f)
-    return temp_file.name
+    try:
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".yml")
+        with open(temp_file.name, 'w') as f:
+            yaml.dump(galaxy_requirements, f)
+        return temp_file.name
+    except yaml.YAMLError as e:
+        log_message(f"Error writing YAML to temporary requirements file: {e}")
+        sys.exit(1)
 
 def install_requirements(container_engine, container_image, requirements_file, roles_dir, collections_dir):
     """Install required Ansible roles and collections persistently in the container using shared volumes."""
@@ -118,8 +128,8 @@ def main():
     container_engine = metadata.get("container_engine", "podman")  # Default to podman if not specified
     container_image = metadata.get("container_image", "quay.io/ansible/ansible-runner")  # Default image
 
-    # Define persistent directories for Ansible roles and collections
-    requirements_dir = os.path.join(os.getcwd(), "ansible_requirements")
+    # Create a temporary directory for Ansible roles and collections
+    requirements_dir = tempfile.mkdtemp()
     roles_dir = os.path.join(requirements_dir, "roles")
     collections_dir = os.path.join(requirements_dir, "collections")
     os.makedirs(roles_dir, exist_ok=True)
@@ -130,18 +140,23 @@ def main():
     if galaxy_requirements:
         requirements_file = write_temp_requirements_file(galaxy_requirements)
 
-        if use_container:
-            # Install requirements persistently in the container
-            install_requirements(container_engine, container_image, requirements_file, roles_dir, collections_dir)
-        else:
-            # Install requirements locally, specifying paths for roles and collections
-            command = [
-                "ansible-galaxy", "install", "-r", requirements_file,
-                "--roles-path", roles_dir,
-                "--collections-path", collections_dir
-            ]
-            log_message("Installing Ansible requirements locally...")
-            subprocess.run(command, check=True)
+        try:
+            if use_container:
+                # Install requirements persistently in the container
+                install_requirements(container_engine, container_image, requirements_file, roles_dir, collections_dir)
+            else:
+                # Install requirements locally, specifying paths for roles and collections
+                command = [
+                    "ansible-galaxy", "install", "-r", requirements_file,
+                    "--roles-path", roles_dir,
+                    "--collections-path", collections_dir
+                ]
+                log_message("Installing Ansible requirements locally...")
+                subprocess.run(command, check=True)
+        finally:
+            # Clean up the temporary requirements file
+            if os.path.exists(requirements_file):
+                os.remove(requirements_file)
 
     # Construct the command based on whether ansible-navigator or ansible-playbook is used
     if use_ansible_navigator:
@@ -176,9 +191,8 @@ def main():
         execution_time = time.time() - start_time
         log_message(f"Execution completed in {execution_time:.2f} seconds with result: {result}")
 
-        # Clean up the temporary requirements file if it was created
-        if galaxy_requirements and os.path.exists(requirements_file):
-            os.remove(requirements_file)
+        # Clean up the temporary requirements directory
+        shutil.rmtree(requirements_dir, ignore_errors=True)
 
 if __name__ == "__main__":
     main()
@@ -212,6 +226,4 @@ galaxy_requirements:           # Requirements to install with ansible-galaxy
   collections:
     - name: community.general
       version: "3.2.0"
-syslog_level: LOG_INFO         # Syslog level for logging
-syslog_priority: LOG_USER      # Syslog priority/facility
-environment
+syslog_level: LOG_INFO         # Syslog
