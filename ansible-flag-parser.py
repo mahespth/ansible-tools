@@ -15,6 +15,8 @@
 #. run via ansible-navigator !! 
 #. credentials / store / secret reading ?? hsm ?? 
 #. option to run in nice but simole chui like navigator ?? operator mode 
+#  builtin requirements.yml 
+# . system wide config file and user config file, ie global log or comtainer mounts/opts 
 
 
 import argparse
