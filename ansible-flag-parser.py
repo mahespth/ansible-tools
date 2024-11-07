@@ -6,6 +6,14 @@
 # This is a poc
 # Stephen Maher
 
+# todo
+#. set ansbile.cfg options ?? forks / ssh etc 
+#. change path
+#. add loggin feature
+#. set output method 
+#. run in container :)
+#. run via ansible-navigator !! 
+#. credentials / store / secret reading ?? hsm ?? 
 import argparse
 import json
 import yaml
@@ -14,6 +22,8 @@ import subprocess
 import sys
 import signal
 import re
+
+
 
 def load_metadata_from_self():
     """Load metadata by reading YAML directly from the script file itself."""
@@ -26,7 +36,8 @@ def load_metadata_from_self():
         metadata_yaml = metadata_match.group(1)
         return yaml.safe_load(metadata_yaml)
     else:
-        raise ValueError("No metadata found in the script.")
+        pass # do we care if there is no meta??
+        # raise ValueError("No metadata found in the script.")
 
 def parse_flags(metadata):
     """Parse flags from the metadata."""
@@ -36,6 +47,8 @@ def parse_flags(metadata):
     for flag, properties in metadata.items():
         if flag.startswith('_'):  # Skip internal variables
             continue
+            
+        # @@SGM we will extend this
         parser.add_argument(
             f"--{flag}",
             help=properties.get("help", ""),
@@ -44,7 +57,9 @@ def parse_flags(metadata):
         )
 
     # Extra flag for CTRL+C handling and rescuer playbook
-    parser.add_argument("--no-ctrlc", action="store_true", help="Disable CTRL+C trapping.")
+    
+    # @@SGM these should not be exposed but defined from the meta
+    parser.add_argument("--no-ctrl-c", action="store_true", help="Disable CTRL+C trapping.")
     parser.add_argument("--rescuer", action="store_true", help="Execute rescuer playbook on failure.")
 
     return parser.parse_args()
@@ -75,6 +90,8 @@ def main():
 
     # Prepare extra vars and options for ansible-playbook
     extra_vars = {flag: getattr(args, flag) for flag in vars(args)}
+    
+    # also needs extraflags 
 
     # Run ansible-playbook command using __file__ as the playbook
     command = [
