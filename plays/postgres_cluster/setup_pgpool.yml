@@ -1,0 +1,65 @@
+---
+- name: Setup Pgpool-II with PostgreSQL failover
+  hosts: pgpool
+  become: yes
+  vars:
+    pgpool_conf_path: "/etc/pgpool-II/pgpool.conf"
+    pgpool_pcp_path: "/etc/pgpool-II/pcp.conf"
+    pgpool_hba_path: "/etc/pgpool-II/pool_hba.conf"
+    failover_script_path: "/etc/pgpool-II/failover.sh"
+  tasks:
+    - name: Install Pgpool-II and dependencies
+      yum:
+        name: pgpool-II
+        state: present
+
+    - name: Create Pgpool-II configuration directory if not exists
+      file:
+        path: /etc/pgpool-II
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0755'
+
+    - name: Configure pgpool.conf
+      template:
+        src: templates/pgpool.conf.j2
+        dest: "{{ pgpool_conf_path }}"
+        owner: postgres
+        group: postgres
+        mode: '0644'
+
+    - name: Configure PCP authentication
+      copy:
+        content: "{{ pgpool_admin_user }}:{{ pgpool_admin_password | password_hash('md5') }}"
+        dest: "{{ pgpool_pcp_path }}"
+        owner: postgres
+        group: postgres
+        mode: '0600'
+
+    - name: Configure pool_hba.conf
+      copy:
+        content: |
+          host all all 0.0.0.0/0 md5
+        dest: "{{ pgpool_hba_path }}"
+        owner: postgres
+        group: postgres
+        mode: '0644'
+
+    - name: Create failover script
+      copy:
+        content: |
+          #!/bin/bash
+          failed_node_id=$1
+          new_primary_node=$2
+          logger "Node $failed_node_id failed. Promoting node $new_primary_node as new primary."
+        dest: "{{ failover_script_path }}"
+        owner: postgres
+        group: postgres
+        mode: '0755'
+
+    - name: Enable and start Pgpool-II service
+      systemd:
+        name: pgpool-II
+        enabled: yes
+        state: restarted
