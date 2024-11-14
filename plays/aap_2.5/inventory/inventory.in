@@ -1,11 +1,19 @@
-[controller]
+# SGM this should be identical to inventory file for 2.5 installer.
+
+[automation_controller]
 controller.example.com
 
 [automation_hub]
 hub.example.com
 
-[eda]
+[automation_eda]
 eda.example.com
 
 [platform_gateway]
 gateway.example.com
+
+[postgresql]
+postgresql.example.com
+
+[redis]
+redis.example.com
