@@ -1,0 +1,11 @@
+[controller]
+controller.example.com
+
+[automation_hub]
+hub.example.com
+
+[eda]
+eda.example.com
+
+[platform_gateway]
+gateway.example.com
