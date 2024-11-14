@@ -1,0 +1,66 @@
+---
+- name: Take AAP hosts offline using AAP API
+  hosts: localhost
+  gather_facts: no
+  vars_files:
+    - /etc/tower/inventory
+
+  vars:
+    # Load inventory details
+    aap_host: "{{ host }}"
+    aap_username: "{{ admin_user }}"
+    aap_password: "{{ admin_password }}"
+    aap_protocol: "{{ protocol | default('https') }}"
+
+    # Define the API URL
+    aap_api_url: "{{ aap_protocol }}://{{ aap_host }}/api/v2/instances/"
+
+  tasks:
+    - name: Get an authentication token
+      uri:
+        url: "{{ aap_protocol }}://{{ aap_host }}/api/v2/tokens/"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          username: "{{ aap_username }}"
+          password: "{{ aap_password }}"
+        validate_certs: no
+      register: auth_response
+      failed_when: auth_response.status != 201
+      no_log: true
+
+    - name: Set auth token for subsequent requests
+      set_fact:
+        auth_token: "{{ auth_response.json.token }}"
+
+    - name: Get the list of instances
+      uri:
+        url: "{{ aap_api_url }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ auth_token }}"
+        validate_certs: no
+      register: instances_response
+      failed_when: instances_response.status != 200
+
+    - name: Disable each host by setting it to maintenance mode
+      uri:
+        url: "{{ aap_api_url }}{{ item.id }}/"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ auth_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          enabled: false
+        validate_certs: no
+      loop: "{{ instances_response.json.results }}"
+      register: disable_response
+      failed_when: disable_response.status not in [200, 204]
+
+    - name: Print result of disabling hosts
+      debug:
+        msg: "Host {{ item.id }} ({{ item.hostname }}) set to maintenance mode"
+      loop: "{{ instances_response.json.results }}"
