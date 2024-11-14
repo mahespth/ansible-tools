@@ -1,8 +1,16 @@
 ---
-- name: Install prerequisites for AAP 2.5 and EDA on RHEL 9
+
+- name: Install prerequisites for AAP 2.5, EDA, Platform Gateway on RHEL 9 (VMware ESXi)
   hosts: localhost
   become: true
   vars:
+    min_cpu_cores: 4
+    min_memory_gb: 16
+    min_root_space_gb: 50
+    min_pulp_space_gb: 100
+    min_log_space_gb: 20
+    min_swap_space_gb: 4
+
     aap_packages:
       - python3
       - python3-pip
@@ -30,6 +38,8 @@
       - ansible-core
       - ansible-automation-platform-installer
       - redis
+      - nginx
+      - open-vm-tools
 
     firewall_ports:
       - { port: 443, protocol: tcp }
@@ -40,33 +50,83 @@
       - { port: 8052, protocol: tcp }
       - { port: 8053, protocol: tcp }
       - { port: 8080, protocol: tcp }
+      - { port: 8443, protocol: tcp }
 
   tasks:
 
-  - name: Ensure Red Hat subscription is registered
-    command: subscription-manager register --auto-attach
-    register: register_output
+  # Check CPU cores
+  - name: Check if the system has the minimum required CPU cores
+    command: nproc
+    register: cpu_cores
+  - name: Validate CPU cores
+    assert:
+      that: "cpu_cores.stdout|int >= min_cpu_cores"
+      fail_msg: "System does not have the required {{ min_cpu_cores }} CPU cores."
+
+  # Check system memory
+  - name: Check if the system has the minimum required memory
+    command: free -g | grep Mem | awk '{print $2}'
+    register: memory_gb
+  - name: Validate memory
+    assert:
+      that: "memory_gb.stdout|int >= min_memory_gb"
+      fail_msg: "System does not have the required {{ min_memory_gb }} GB of RAM."
+
+  # Check available disk space on root
+  - name: Check available disk space on root (/)
+    command: df -BG --output=avail / | tail -1 | sed 's/G//'
+    register: root_space
+  - name: Validate root partition space
+    assert:
+      that: "root_space.stdout|int >= min_root_space_gb"
+      fail_msg: "Insufficient disk space on root (/). Minimum {{ min_root_space_gb }} GB required."
+
+  # Check available disk space on /var/lib/pulp
+  - name: Check available disk space on /var/lib/pulp
+    command: df -BG --output=avail /var/lib/pulp | tail -1 | sed 's/G//'
+    register: pulp_space
     ignore_errors: yes
-    when: register_output.rc != 0
+  - name: Validate /var/lib/pulp space
+    assert:
+      that: "pulp_space.stdout|int >= min_pulp_space_gb"
+      fail_msg: "Insufficient disk space on /var/lib/pulp. Minimum {{ min_pulp_space_gb }} GB required."
+    when: pulp_space is defined and pulp_space.stdout != ""
 
-  - name: Enable required repositories
-    command: >
-      subscription-manager repos
-      --enable=ansible-automation-platform-2.5-for-rhel-9-x86_64-rpms
-      --enable=ansible-eda-2.5-for-rhel-9-x86_64-rpms
+  # Check available disk space on /var/log
+  - name: Check available disk space on /var/log
+    command: df -BG --output=avail /var/log | tail -1 | sed 's/G//'
+    register: log_space
+  - name: Validate /var/log space
+    assert:
+      that: "log_space.stdout|int >= min_log_space_gb"
+      fail_msg: "Insufficient disk space on /var/log. Minimum {{ min_log_space_gb }} GB required."
 
+  # Check available swap space
+  - name: Check available swap space
+    command: free -g | grep Swap | awk '{print $2}'
+    register: swap_space
+  - name: Validate swap space
+    assert:
+      that: "swap_space.stdout|int >= min_swap_space_gb"
+      fail_msg: "Insufficient swap space. Minimum {{ min_swap_space_gb }} GB required."
+
+  # Nested Virtualization Check
+  - name: Check if nested virtualization is supported
+    command: grep -E 'vmx|svm' /proc/cpuinfo
+    register: nested_virt_check
+    changed_when: false
+  - name: Display nested virtualization status
+    debug:
+      msg: "{{ 'Nested virtualization is supported' if 'vmx' in nested_virt_check.stdout or 'svm' in nested_virt_check.stdout else 'Nested virtualization is not supported' }}"
+
+  # Install required packages
   - name: Install required packages
     dnf:
       name: "{{ aap_packages }}"
       state: present
       update_cache: true
 
-  - name: Start and enable firewalld
-    systemd:
-      name: firewalld
-      state: started
-      enabled: true
-
+  # Configure firewall
   - name: Open required firewall ports
     firewalld:
       port: "{{ item.port }}/{{ item.protocol }}"
@@ -76,44 +136,28 @@
   - name: Reload firewalld to apply changes
     command: firewall-cmd --reload
 
-  - name: Ensure SELinux is set to enforcing
-    selinux:
-      state: enforcing
-
-  - name: Adjust SELinux context for EDA event listener port
-    seport:
-      ports: 8080
-      proto: tcp
-      setype: http_port_t
-
-  - name: Start and enable Redis service
+  # Install and enable VMware Tools
+  - name: Start and enable VMware Tools
     systemd:
-      name: redis
+      name: vmtoolsd
       state: started
       enabled: true
 
-  - name: Verify Redis is running
-    command: systemctl status redis
-    register: redis_status
-    ignore_errors: true
-
-  - name: Create swap file (if not already present)
+  # Create swap file if needed
+  - name: Create swap file (if not present)
     command: |
       fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
     args:
       creates: /swapfile
-
   - name: Ensure swap entry in /etc/fstab
     lineinfile:
       path: /etc/fstab
       line: "/swapfile swap swap defaults 0 0"
       state: present
 
-  - name: Enable swap permanently
-    command: swapon --all
-
   - name: Display success message
     debug:
-      msg: "Prerequisites for AAP 2.5 and EDA have been installed successfully."
+      msg: "All checks passed and prerequisites installed successfully."
 
 
+...
