@@ -1,0 +1,22 @@
+all:
+  hosts:
+    pgpool:
+      ansible_host: pgpool-server
+    postgres_primary:
+      ansible_host: primary-db
+    postgres_replica1:
+      ansible_host: replica-db1
+    postgres_replica2:
+      ansible_host: replica-db2
+  vars:
+    pgpool_port: 5432
+    postgres_user: "postgres"
+    postgres_password: "yourpassword"
+    pgpool_admin_user: "pgpool"
+    pgpool_admin_password: "pgpoolpass"
+    replication_user: "replicator"
+    replication_password: "replpassword"
+    primary_node: primary-db
+    replicas:
+      - replica-db1
+      - replica-db2
