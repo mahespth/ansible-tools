@@ -1,0 +1,119 @@
+---
+- name: Install prerequisites for AAP 2.5 and EDA on RHEL 9
+  hosts: localhost
+  become: true
+  vars:
+    aap_packages:
+      - python3
+      - python3-pip
+      - python3-ansible-runner
+      - python3-eventlet
+      - python3-redis
+      - python3-requests
+      - python3-setuptools
+      - python3-ansible-eda
+      - gcc
+      - libffi-devel
+      - openssl-devel
+      - make
+      - git
+      - curl
+      - jq
+      - firewalld
+      - policycoreutils-python-utils
+      - rsync
+      - sshpass
+      - tar
+      - unzip
+      - wget
+      - iptables-services
+      - ansible-core
+      - ansible-automation-platform-installer
+      - redis
+
+    firewall_ports:
+      - { port: 443, protocol: tcp }
+      - { port: 5000, protocol: tcp }
+      - { port: 6379, protocol: tcp }
+      - { port: 5432, protocol: tcp }
+      - { port: 80, protocol: tcp }
+      - { port: 8052, protocol: tcp }
+      - { port: 8053, protocol: tcp }
+      - { port: 8080, protocol: tcp }
+
+  tasks:
+
+  - name: Ensure Red Hat subscription is registered
+    command: subscription-manager register --auto-attach
+    register: register_output
+    ignore_errors: yes
+    when: register_output.rc != 0
+
+  - name: Enable required repositories
+    command: >
+      subscription-manager repos
+      --enable=ansible-automation-platform-2.5-for-rhel-9-x86_64-rpms
+      --enable=ansible-eda-2.5-for-rhel-9-x86_64-rpms
+
+  - name: Install required packages
+    dnf:
+      name: "{{ aap_packages }}"
+      state: present
+      update_cache: true
+
+  - name: Start and enable firewalld
+    systemd:
+      name: firewalld
+      state: started
+      enabled: true
+
+  - name: Open required firewall ports
+    firewalld:
+      port: "{{ item.port }}/{{ item.protocol }}"
+      permanent: true
+      state: enabled
+    with_items: "{{ firewall_ports }}"
+  - name: Reload firewalld to apply changes
+    command: firewall-cmd --reload
+
+  - name: Ensure SELinux is set to enforcing
+    selinux:
+      state: enforcing
+
+  - name: Adjust SELinux context for EDA event listener port
+    seport:
+      ports: 8080
+      proto: tcp
+      setype: http_port_t
+
+  - name: Start and enable Redis service
+    systemd:
+      name: redis
+      state: started
+      enabled: true
+
+  - name: Verify Redis is running
+    command: systemctl status redis
+    register: redis_status
+    ignore_errors: true
+
+  - name: Create swap file (if not already present)
+    command: |
+      fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+    args:
+      creates: /swapfile
+
+  - name: Ensure swap entry in /etc/fstab
+    lineinfile:
+      path: /etc/fstab
+      line: "/swapfile swap swap defaults 0 0"
+      state: present
+
+  - name: Enable swap permanently
+    command: swapon --all
+
+  - name: Display success message
+    debug:
+      msg: "Prerequisites for AAP 2.5 and EDA have been installed successfully."
+
+
