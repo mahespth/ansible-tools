@@ -1,0 +1,134 @@
+---
+
+- name: Configure PostgreSQL Cluster
+  hosts: pg_cluster
+  become: yes
+  vars:
+    postgres_version: "13"
+    replication_user: "replicator"
+    replication_password: "securepassword"
+    primary_host: "pgp"
+    replica_hosts:
+      - "pgro1"
+      - "pgro2"
+    pg_data_dir: "/var/lib/postgresql/{{ postgres_version }}/main"
+    wal_keep_size: "128MB"
+    max_wal_senders: 5
+    archive_mode: "on"
+    archive_command: "cp %p /var/lib/postgresql/archive/%f"
+
+  tasks:
+    - name: Install PostgreSQL
+      apt:
+        name: "postgresql-{{ postgres_version }}"
+        state: present
+        update_cache: yes
+
+    - name: Install PostgreSQL contrib package
+      apt:
+        name: "postgresql-contrib-{{ postgres_version }}"
+        state: present
+
+- name: Configure Primary Node
+  hosts: pg_primary
+  become: yes
+  tasks:
+    - name: Ensure PostgreSQL is running
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Configure primary node settings for replication
+      lineinfile:
+        path: "{{ pg_data_dir }}/postgresql.conf"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: "^wal_level", line: "wal_level = replica" }
+        - { regexp: "^max_wal_senders", line: "max_wal_senders = {{ max_wal_senders }}" }
+        - { regexp: "^wal_keep_size", line: "wal_keep_size = '{{ wal_keep_size }}'" }
+        - { regexp: "^archive_mode", line: "archive_mode = {{ archive_mode }}" }
+        - { regexp: "^archive_command", line: "archive_command = '{{ archive_command }}'" }
+
+    - name: Allow replication user connections
+      lineinfile:
+        path: "{{ pg_data_dir }}/pg_hba.conf"
+        line: "host replication {{ replication_user }} {{ item }} md5"
+      loop: "{{ replica_hosts }}"
+
+    - name: Create replication user
+      postgresql_user:
+        name: "{{ replication_user }}"
+        password: "{{ replication_password }}"
+        role_attr_flags: "REPLICATION LOGIN"
+
+    - name: Restart PostgreSQL for changes to take effect
+      service:
+        name: postgresql
+        state: restarted
+
+- name: Configure Replica Nodes
+  hosts: pg_replicas
+  become: yes
+  tasks:
+    - name: Stop PostgreSQL service
+      service:
+        name: postgresql
+        state: stopped
+
+    - name: Remove existing data directory
+      file:
+        path: "{{ pg_data_dir }}"
+        state: absent
+
+    - name: Perform base backup from primary
+      command: >
+        pg_basebackup -h {{ primary_host }} -D {{ pg_data_dir }} -U {{ replication_user }} -Fp -Xs -P -R
+      environment:
+        PGPASSWORD: "{{ replication_password }}"
+
+    - name: Enable hot standby mode for read-only access
+      lineinfile:
+        path: "{{ pg_data_dir }}/postgresql.conf"
+        regexp: "^hot_standby"
+        line: "hot_standby = on"
+
+    - name: Start PostgreSQL service
+      service:
+        name: postgresql
+        state: started
+
+- name: Configure HAProxy on Frontend Node
+  hosts: pg_front
+  become: yes
+  tasks:
+    - name: Install HAProxy
+      apt:
+        name: haproxy
+        state: present
+        update_cache: yes
+
+    - name: Configure HAProxy for PostgreSQL load balancing
+      blockinfile:
+        path: /etc/haproxy/haproxy.cfg
+        block: |
+          frontend postgres
+              bind *:5432
+              default_backend postgres_servers
+
+          backend postgres_servers
+              balance roundrobin
+              option httpchk
+              server pgp {{ hostvars['pgp'].ansible_host }}:5432 check
+              server pgro1 {{ hostvars['pgro1'].ansible_host }}:5432 check
+              server pgro2 {{ hostvars['pgro2'].ansible_host }}:5432 check
+
+    - name: Restart HAProxy
+      service:
+        name: haproxy
+        state: restarted
+
+...
+
+        
