@@ -1,0 +1,98 @@
+---
+- name: Optimize RHEL 9 for PostgreSQL on VMware
+  hosts: all
+  become: yes
+  vars:
+    tuned_profile: "postgresql"
+    tuned_profile_dir: "/etc/tuned/{{ tuned_profile }}"
+
+  tasks:
+    - name: Install tuned and tuned-profiles-postgresql
+      dnf:
+        name:
+          - tuned
+          - tuned-profiles-postgresql
+        state: present
+        update_cache: yes
+
+    - name: Enable and start tuned service
+      systemd:
+        name: tuned
+        state: started
+        enabled: yes
+
+    - name: Set the tuned profile to PostgreSQL
+      command: tuned-adm profile "{{ tuned_profile }}"
+      register: tuned_profile_set
+      changed_when: "'profile is already active' not in tuned_profile_set.stdout"
+
+    - name: Verify the tuned profile is active
+      command: tuned-adm active
+      register: tuned_active
+      changed_when: false
+      tags: verify
+      failed_when: "'{{ tuned_profile }}' not in tuned_active.stdout"
+
+    - name: Create custom tuned profile directory if it does not exist
+      file:
+        path: "{{ tuned_profile_dir }}"
+        state: directory
+
+    - name: Customize the tuned profile for PostgreSQL on VMware
+      blockinfile:
+        path: "{{ tuned_profile_dir }}/tuned.conf"
+        create: yes
+        block: |
+          [main]
+          summary=Optimized for PostgreSQL on VMware
+          
+          [cpu]
+          governor=performance
+          energy_perf_bias=performance
+          
+          [vm]
+          transparent_hugepages=never
+          swappiness=1
+
+          [sysctl]
+          vm.dirty_ratio=15
+          vm.dirty_background_ratio=5
+          vm.overcommit_memory=2
+          vm.overcommit_ratio=100
+          vm.dirty_expire_centisecs=500
+          vm.dirty_writeback_centisecs=100
+          kernel.sched_migration_cost_ns=5000000
+          kernel.sched_autogroup_enabled=0
+
+          [disk]
+          readahead=>4096
+
+          [net]
+          net.core.rmem_max=4194304
+          net.core.wmem_max=4194304
+          net.core.rmem_default=262144
+          net.core.wmem_default=262144
+          net.ipv4.tcp_fin_timeout=15
+          net.ipv4.tcp_keepalive_time=300
+          net.ipv4.tcp_keepalive_probes=5
+          net.ipv4.tcp_keepalive_intvl=30
+
+          [bootloader]
+          cmdline=transparent_hugepage=never
+
+    - name: Restart tuned service to apply changes
+      systemd:
+        name: tuned
+        state: restarted
+
+    - name: Display tuned active profile
+      command: tuned-adm active
+      register: tuned_active_final
+      changed_when: false
+      tags: verify
+      failed_when: "'{{ tuned_profile }}' not in tuned_active_final.stdout"
+
+    - name: Print success message
+      debug:
+        msg: "PostgreSQL tuned profile applied and customized successfully for VMware."
+
