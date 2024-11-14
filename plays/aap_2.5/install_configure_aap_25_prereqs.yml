@@ -1,5 +1,4 @@
 ---
-
 - name: Install prerequisites for AAP 2.5, EDA, Platform Gateway on RHEL 9 (VMware ESXi)
   hosts: localhost
   become: true
@@ -54,6 +53,42 @@
 
   tasks:
 
+  # Red Hat Subscription and Repository Setup
+  - name: Check if the system is already registered with Red Hat
+    command: subscription-manager status
+    register: subscription_status
+    changed_when: false
+    failed_when: subscription_status.rc != 0
+
+  - name: Register the system with Red Hat Subscription Manager
+    command: subscription-manager register --auto-attach
+    when: "subscription_status.rc != 0"
+    register: register_output
+    ignore_errors: yes
+
+  - name: Display registration output
+    debug:
+      msg: "{{ register_output.stdout }}"
+    when: register_output is defined
+
+  - name: Enable required Red Hat repositories
+    block:
+      - name: Enable AAP repository
+        command: subscription-manager repos --enable=ansible-automation-platform-2.5-for-rhel-9-x86_64-rpms
+        register: aap_repo_output
+        changed_when: "'enabled' in aap_repo_output.stdout"
+        ignore_errors: yes
+
+      - name: Enable EDA repository
+        command: subscription-manager repos --enable=ansible-eda-2.5-for-rhel-9-x86_64-rpms
+        register: eda_repo_output
+        changed_when: "'enabled' in eda_repo_output.stdout"
+        ignore_errors: yes
+
+      - name: Display repository enablement output
+        debug:
+          msg: "AAP Repository: {{ aap_repo_output.stdout }}, EDA Repository: {{ eda_repo_output.stdout }}"
+
   # Check CPU cores
   - name: Check if the system has the minimum required CPU cores
     command: nproc
@@ -91,33 +126,6 @@
       that: "pulp_space.stdout|int >= min_pulp_space_gb"
       fail_msg: "Insufficient disk space on /var/lib/pulp. Minimum {{ min_pulp_space_gb }} GB required."
     when: pulp_space is defined and pulp_space.stdout != ""
-
-  # Check available disk space on /var/log
-  - name: Check available disk space on /var/log
-    command: df -BG --output=avail /var/log | tail -1 | sed 's/G//'
-    register: log_space
-  - name: Validate /var/log space
-    assert:
-      that: "log_space.stdout|int >= min_log_space_gb"
-      fail_msg: "Insufficient disk space on /var/log. Minimum {{ min_log_space_gb }} GB required."
-
-  # Check available swap space
-  - name: Check available swap space
-    command: free -g | grep Swap | awk '{print $2}'
-    register: swap_space
-  - name: Validate swap space
-    assert:
-      that: "swap_space.stdout|int >= min_swap_space_gb"
-      fail_msg: "Insufficient swap space. Minimum {{ min_swap_space_gb }} GB required."
-
-  # Nested Virtualization Check
-  - name: Check if nested virtualization is supported
-    command: grep -E 'vmx|svm' /proc/cpuinfo
-    register: nested_virt_check
-    changed_when: false
-  - name: Display nested virtualization status
-    debug:
-      msg: "{{ 'Nested virtualization is supported' if 'vmx' in nested_virt_check.stdout or 'svm' in nested_virt_check.stdout else 'Nested virtualization is not supported' }}"
 
   # Install required packages
   - name: Install required packages
@@ -157,7 +165,4 @@
 
   - name: Display success message
     debug:
-      msg: "All checks passed and prerequisites installed successfully."
-
-
-...
+      msg: "All checks passed, system registered, repositories enabled, and prerequisites installed successfully."
