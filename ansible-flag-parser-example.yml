@@ -1,0 +1,81 @@
+#!/usr/bin/env ansible-flag-parser
+
+#  name or flags - Either a name or a list of option strings, e.g. 'foo' or '-f', '--foo'.
+#  action - The basic type of action to be taken when this argument is encountered at the command line.
+#  nargs - The number of command-line arguments that should be consumed.
+#  const - A constant value required by some action and nargs selections.
+#  default - The value produced if the argument is absent from the command line and if it is absent from the namespace object.
+#  type - The type to which the command-line argument should be converted.
+#  choices - A sequence of the allowable values for the argument.
+#  required - Whether or not the command-line option may be omitted (optionals only).
+#  help - A brief description of what the argument does.
+#  metavar - A name for the argument in usage messages.
+#  dest - The name of the attribute to be added to the object returned by parse_args().
+#  deprecated - Whether or not use of the argument is deprecated.
+
+# --- PARSER ---
+# playbook: main_playbook.yml
+# flags:
+#  env:
+#    help: Target environment
+#    choices: [ 'prod', 'preprod']
+#    required: true 
+#    default: 1
+#  stop:
+#    # environment:
+#    #    ANSIBLE_VAULT_FILE=/etc/ansible/vault_script
+#    help: "Stop the target environment"
+#    required: false
+#    default: false
+#    type: bool
+#    vars: 
+#      stop_environment: true
+#  start:
+#    help: "Start the target environment"
+#    required: false
+#    default: false
+#    type: bool
+#    vars:
+#      start_environment: true
+#  check:
+#    help: "Run in Check mode - no changes made"
+#    required: false
+#    default: false ## watch this if null @@SGM
+#    type: bool
+#    flags: "-C"
+#    vars: 
+#    # xcheck: True
+# no_ctrlc:
+#    help: "Disable CTRL+C trapping"
+#    required: false
+#    default: false
+# rescuer:
+#    help: "Execute rescuer playbook on failure"
+#    required: false
+#    default: false
+# hosts: localhost
+# environment:
+#    MY_ENV_VAR: "some_value"
+#    PYTHONWARNINGS: ignore::UserWarning
+#    ANSIBLE_INVENTORY_ENABLED: ini,yaml,script,host_list,auto
+#    ANSIBLE_LOCALHOST_WARNING: False
+#    ANSIBLE_ENABLE_TASK_DEBUGGER: False
+#    ANSIBLE_DISPLAY_ARGS_TO_STDOUT: True
+#    ANSIBLE_STDOUT_CALLBACK: oneline
+# ansible_options:
+#  --limit: "localhost"
+#  --tags: "test"
+# --- END PARSER ---
+
+
+- hosts: localhost
+  gather_facts: false
+
+  tasks:
+
+    - name: Show stuff
+      debug:
+        var: stop_environment
+    - name: more
+      debug:
+        msg: "what we we have is {{ start_environment | default('nothing')}}"

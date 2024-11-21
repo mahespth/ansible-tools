@@ -1,0 +1,44 @@
+#!/usr/bin/env ansible-flag-parser-container.py
+
+- name: "Parse Flags"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    metadata:
+    # --- METADATA ---
+    # Embedded YAML metadata defining playbooks and variables
+    playbook: main_playbook.yml
+    flags:
+        flag1:
+            help: "First flag"
+            required: true
+        flag2:
+            help: "Second flag"
+            default: "value2"
+    no_ctrlc:
+        help: "Disable CTRL+C trapping"
+        required: false
+        default: false
+    rescuer:
+        help: "Execute rescuer playbook on failure"
+        required: false
+        default: false
+    use_ansible_navigator: true    # Internal option to use ansible-navigator instead of ansible-playbook
+    use_container: true            # Enable running within a container
+    container_engine: "podman"     # Specify container engine (podman or docker)
+    container_image: "quay.io/ansible/ansible-runner"  # Container image with Ansible installed
+    galaxy_requirements:           # Requirements to install with ansible-galaxy
+        roles:
+            - src: geerlingguy.apache
+              version: "1.0.0"
+        collections:
+            - name: community.general
+              version: "3.2.0"
+    syslog_level: LOG_INFO         # Syslog
+    
+  pre_tasks:
+    - ansible.builtin.fail:
+        msg: "You should never see this as it means the parser never ran"
+            
+    
