@@ -1,0 +1,30 @@
+---
+- name: Update database config to use HashiCorp Vault
+  hosts: all
+  become: true
+  tasks:
+
+    - name: Ensure the 'hvac' library is installed
+      ansible.builtin.pip:
+        name: hvac
+      when: ansible_python_version is version('3.0', '>=')
+
+    - name: Backup existing postgres.py file
+      ansible.builtin.copy:
+        src: /etc/tower/conf.d/postgres.py
+        dest: /etc/tower/conf.d/postgres.py.bak
+        remote_src: yes
+
+    - name: Create a new postgres.py file to use Vault
+      ansible.builtin.template:
+        src: templates/postgres.py.j2
+        dest: /etc/tower/conf.d/postgres.py
+        owner: awx
+        group: awx
+        mode: '0644'
+
+    - name: Restart AAP service to apply changes
+      ansible.builtin.systemd:
+        name: ansible-tower
+        state: restarted
+
