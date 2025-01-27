@@ -16,8 +16,16 @@ Debug: Edit settings.py and restart ` systemctl restart automation-gateway.targe
 
 /usr/lib/python3.11/site-packages/aap_gateway_api/settings.py
 
+/var/log/ansible-automation-platform/gateway/gateway.log
+
+Note: I turned on DEBUG, for the loggers `django`, `django_auth_ldap`, `aap` to get the correct level of debug to debug ldap issues.
+
+Note: that all results are returned from the ldap query in lowercase - however the documentation claims its case sensitive when mapping the claims. However that contracdiction will have you running around in circles for days.
+
+
+
 ```
-# User our own user model
+# User our own user model`
 AUTH_USER_MODEL = 'aap_gateway_api.User'
 
 # SECURITY WARNING: don't run with debug turned on in production!
