@@ -40,13 +40,22 @@
         roles: "{{ db_user }}"
         privs: "ALL"
         state: present
+
+    - name: Grant ALL privileges on the database to the GitLab user
+      community.postgresql.postgresql_privs:
+        db: "{{ db_name }}"
+        type: "schema"
+        objs: "public"
+        roles: "{{ db_user }}"
+        privs: "ALL"
+        state: present
         
     - name: Allow connections from the GitLab server in pg_hba.conf
       lineinfile:
         backup: true
         path: "{{ postgres_data_dir }}/pg_hba.conf"
-        regexp: "^host\\s+{{ db_name }}\\s+{{ db_user }}\\s+{{ gitlab_server_ip }}\\s+scram-sha-256$"
-        line: "host    {{ db_name }}    {{ db_user }}    {{ gitlab_server_ip }}    md5"
+        regexp: "^host\\s+{{ db_name }}\\s+{{ db_user }}\\s+{{ gitlab_server_ip }}\\s+"
+        line: "host    {{ db_name }}    {{ db_user }}    {{ gitlab_server_ip }}    scram-sha-256"
         create: yes
         state: present
       notify: Restart PostgreSQL
