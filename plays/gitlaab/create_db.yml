@@ -45,7 +45,7 @@
       lineinfile:
         backup: true
         path: "{{ postgres_data_dir }}/pg_hba.conf"
-        regexp: "^host\\s+{{ db_name }}\\s+{{ db_user }}\\s+{{ gitlab_server_ip }}\\s+md5$"
+        regexp: "^host\\s+{{ db_name }}\\s+{{ db_user }}\\s+{{ gitlab_server_ip }}\\s+scram-sha-256$"
         line: "host    {{ db_name }}    {{ db_user }}    {{ gitlab_server_ip }}    md5"
         create: yes
         state: present
