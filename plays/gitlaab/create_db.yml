@@ -1,0 +1,59 @@
+---
+- name: Configure GitLab database on external PostgreSQL
+  hosts: all
+  become: yes
+  gather_facts: false
+
+  vars:
+    db_name: gitlabhq_production
+    db_user: gitlab
+    db_password: "{{ gitlab_password | mandatory }}"
+    # IP address or CIDR block of the GitLab application server(s):
+    gitlab_server_ip: "200.200.3.0/24"
+
+    # Paths and service names can vary by distribution:
+    postgres_data_dir: "/var/lib/pgsql/15/data"
+    postgres_service_name: "postgresql"
+
+  tasks:
+    - name: Ensure the GitLab database is present
+      community.postgresql.postgresql_db:
+        name: "{{ db_name }}"
+        state: present
+        encoding: 'UTF8'
+        lc_collate: 'en_US.UTF-8'
+        lc_ctype: 'en_US.UTF-8'
+
+    - name: Ensure the GitLab user is present and granted privileges on the database
+      community.postgresql.postgresql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        db: "{{ db_name }}"
+        priv: "{{ db_name }}:ALL"
+        state: present
+        login: true
+
+    - name: Allow connections from the GitLab server in pg_hba.conf
+      lineinfile:
+        backup: true
+        path: "{{ postgres_data_dir }}/pg_hba.conf"
+        regexp: "^host\\s+{{ db_name }}\\s+{{ db_user }}\\s+{{ gitlab_server_ip }}\\s+md5$"
+        line: "host    {{ db_name }}    {{ db_user }}    {{ gitlab_server_ip }}    md5"
+        create: yes
+        state: present
+      notify: Restart PostgreSQL
+
+    - name: Listen on all interfaces (if needed)
+      lineinfile:
+        backup: true
+        path: "{{ postgres_data_dir }}/postgresql.conf"
+        regexp: "^#?listen_addresses\\s*=.*"
+        line: "listen_addresses = '*'"
+        state: present
+      notify: Restart PostgreSQL
+
+  handlers:
+    - name: Restart PostgreSQL
+      service:
+        name: "{{ postgres_service_name }}"
+        state: restarted
