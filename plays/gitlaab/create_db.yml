@@ -9,7 +9,7 @@
     db_user: gitlab
     db_password: "{{ gitlab_password | mandatory }}"
     # IP address or CIDR block of the GitLab application server(s):
-    gitlab_server_ip: "200.200.3.0/24"
+    gitlab_server_ip: "10.10/16"
 
     # Paths and service names can vary by distribution:
     postgres_data_dir: "/var/lib/pgsql/15/data"
@@ -21,18 +21,26 @@
         name: "{{ db_name }}"
         state: present
         encoding: 'UTF8'
-        lc_collate: 'en_US.UTF-8'
-        lc_ctype: 'en_US.UTF-8'
-
-    - name: Ensure the GitLab user is present and granted privileges on the database
+        lc_collate: 'en_GB.UTF-8'
+        lc_ctype: 'en_GB.UTF-8'
+        
+    - name: Ensure the GitLab user is present (login role only)
       community.postgresql.postgresql_user:
         name: "{{ db_user }}"
         password: "{{ db_password }}"
         db: "{{ db_name }}"
-        priv: "{{ db_name }}:ALL"
+        role_attr_flags: "LOGIN"
         state: present
-        login: true
 
+    - name: Grant ALL privileges on the database to the GitLab user
+      community.postgresql.postgresql_privs:
+        db: "{{ db_name }}"
+        type: "database"
+        objs: "{{ db_name }}"
+        roles: "{{ db_user }}"
+        privs: "ALL"
+        state: present
+        
     - name: Allow connections from the GitLab server in pg_hba.conf
       lineinfile:
         backup: true
