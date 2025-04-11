@@ -1,0 +1,37 @@
+- hosts: localhost
+  gather_facts: no
+  vars:
+    # Base URL for your GitLab instance.
+    gitlab_url: "https://gitlab.example.com"
+    # Replace with the actual project ID where you want to create the token.
+    project_id: 123
+    # Define a name for your token.
+    token_name: "ansible_project_token"
+    # Set an expiration date for the token (YYYY-MM-DD).
+    token_expires: "2025-12-31"
+    # Set the desired scopes for the token. Adjust these scopes as needed.
+    token_scopes:
+      - read_api
+      - read_repository
+    # Your administrator's Personal Access Token which has permission to create tokens.
+    admin_personal_token: "YOUR_ADMIN_PERSONAL_ACCESS_TOKEN"
+
+  tasks:
+    - name: Create a new project access token for the admin's project
+      uri:
+        url: "{{ gitlab_url }}/api/v4/projects/{{ project_id }}/access_tokens"
+        method: POST
+        headers:
+          PRIVATE-TOKEN: "{{ admin_personal_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ token_name }}"
+          expires_at: "{{ token_expires }}"
+          scopes: "{{ token_scopes }}"
+        validate_certs: yes  # Change to 'no' if testing against a self-signed certificate (not recommended in production)
+      register: project_token_result
+
+    - name: Display the response from GitLab API
+      debug:
+        var: project_token_result.json
