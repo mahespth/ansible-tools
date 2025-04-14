@@ -1,0 +1,86 @@
+---
+
+# GITLAB Export for AG GITLAB import.
+#
+# Steve Maher.
+# ---------------------------------------------------------
+
+- name: Export multiple GitLab projects and transfer to FTP location
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    # GitLab API token
+    gitlab_token: "YOUR_GITLAB_PRIVATE_TOKEN"  # Replace with your GitLab access token
+
+    # Define your projects as a dictionary.
+    # Each key is the project name and each value is the GitLab project's base API URL.
+    # The URL should point to the API endpoint for that project, which is then used to build the export URLs.
+    projects:
+      project1: "https://gitlab.example.com/api/v4/projects/12345"
+      project2: "https://gitlab.example.com/api/v4/projects/23456"
+    
+    # FTP server configuration
+    ftp_host: "ftp.example.com"       # FTP server hostname
+    ftp_user: "ftp_username"          # FTP username
+    ftp_password: "ftp_password"      # FTP password
+
+    # Export settings
+    export_dir: "/tmp/gitlab_export"  # Local directory to store export files
+    export_poll_retries: 20           # Number of retries while polling for export completion
+    export_poll_delay: 15             # Delay in seconds between poll attempts
+
+  tasks:
+    - name: Ensure export directory exists
+      file:
+        path: "{{ export_dir }}"
+        state: directory
+      run_once: true
+
+    - name: Export and transfer each GitLab project
+      block:
+        - name: Start export for project {{ item.key }}
+          uri:
+            url: "{{ item.value }}/export"
+            method: POST
+            headers:
+              PRIVATE-TOKEN: "{{ gitlab_token }}"
+            status_code: 202
+          register: export_response
+
+        - name: Poll for export to finish for project {{ item.key }}
+          uri:
+            url: "{{ item.value }}/export"
+            method: GET
+            headers:
+              PRIVATE-TOKEN: "{{ gitlab_token }}"
+          register: export_status
+          until: export_status.json.export_status == "finished"
+          retries: "{{ export_poll_retries }}"
+          delay: "{{ export_poll_delay }}"
+
+        - name: Download export file for project {{ item.key }}
+          uri:
+            url: "{{ item.value }}/export/download"
+            method: GET
+            headers:
+              PRIVATE-TOKEN: "{{ gitlab_token }}"
+            return_content: yes
+          register: download_content
+
+        - name: Save export file locally for project {{ item.key }}
+          copy:
+            content: "{{ download_content.content }}"
+            dest: "{{ export_dir }}/{{ item.key }}.tgz"
+            mode: '0644'
+
+        - name: Transfer export file to FTP server for project {{ item.key }}
+          shell: >
+            curl -T {{ export_dir }}/{{ item.key }}.tgz
+            ftp://{{ ftp_user }}:{{ ftp_password }}@{{ ftp_host }}/
+          args:
+            executable: /bin/bash
+      loop: "{{ projects | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
