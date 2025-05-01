@@ -23,6 +23,7 @@ export GIT_SSL_NO_VERIFY=true
 microdnf install \
         -y gcc python3.11-devel net-snmp-devel net-snmp-libs 2>&1 \
         | tee /tmp/install.out
+microdnf install  -y net-snmp net-snmp-utils #python3-net-snmp ??
 
 PACKAGES=$( awk '/^Installing:/ { print $2 }' /tmp/install.out | cut -f1 -d";" | paste -s -d" " - )
 
@@ -32,7 +33,7 @@ pip3.11 install \
   --trusted-host pypi.org \
   --trusted-host files.pythonhosted.org
 
-#      microdnf install  -y net-snmp net-snmp-utils #python3-net-snmp ??
+
 
 microdnf remove -y ${PACKAGES}
 microdnf clean all
