@@ -1,0 +1,11 @@
+# iDRAC 
+omsdk
+
+# VMWARE/VC requirements
+pyVmomi>=6.7.1
+aiohttp
+git+https://github.com/vmware/vsphere-automation-sdk-python.git ; python_version >= '2.7'
+
+python3-netsnmp
+#net-snmp-5.9.1/python
+#pysnmp
