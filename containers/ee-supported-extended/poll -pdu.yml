@@ -1,0 +1,31 @@
+---
+- name: Poll Austin-Hughes PDU key metrics
+  hosts: pdu
+  gather_facts: false
+  collections:
+    - ansible.snmp
+  tasks:
+    - name: Fetch instantaneous metrics
+      ansible.snmp.get:
+        host: "{{ ansible_host }}"
+        version: v2c
+        community: "{{ snmp_community }}"
+        oids:
+          - ipdTotalCurrent.0
+          - ipdTotalPower.0
+          - ipdVoltage.0
+      register: pdu_snmp
+
+    - name: Convert ×10 values back to real units
+      set_fact:
+        amps:  "{{ (pdu_snmp.value[ipdTotalCurrent.0] | int) / 10 }}"
+        power: "{{ (pdu_snmp.value[ipdTotalPower.0]  | int) / 10 }}"
+        volts: "{{ (pdu_snmp.value[ipdVoltage.0]      | int) / 10 }}"
+
+    - name: Fail play if load above 90 % of 16 A breaker
+      fail:
+        msg: "PDU {{ inventory_hostname }} drawing {{ amps }} A – too high!"
+      when: amps|float > 14.4
+
+    - debug:
+        msg: "Load {{ amps }} A  / {{ power }} kW  @ {{ volts }} V"
