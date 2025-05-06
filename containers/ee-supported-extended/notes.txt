@@ -1,0 +1,16 @@
+
+
+Notes:
+
+
+Get context ID for device
+snmpwalk -v3 -l authNoPriv -u xxxansible -A xxxxxxxxxxxxx -a SHA -x AES 101.1.1.1 SNMP-FRAMEKWORK-MIB::snmpEngineID.0
+
+
+# anonymous discovery, works even before you create a user on the device
+snmpget -v3 -l noAuthNoPriv -u "" -n ""   \
+        -e 0x00  <PDU-IP>  SNMP-FRAMEWORK-MIB::snmpEngineID.0
+# example reply
+SNMP-FRAMEWORK-MIB::snmpEngineID.0 = Hex-STRING: 80 00 4F B8 05 24 6B
+
+
