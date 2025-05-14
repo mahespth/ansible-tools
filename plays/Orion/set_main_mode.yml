@@ -1,0 +1,91 @@
+---
+
+- name: Ensure a VM is in maintenance mode in SolarWinds
+  hosts: localhost
+  vars:
+    solarwinds_host: "solarwinds.example.com"
+    solarwinds_user: "admin"
+    solarwinds_pass: "password"
+    vm_name: "vm123"  # Should be lowercase for consistency
+
+  tasks:
+
+    - name: Lookup VM in both Orion.Nodes and Orion.VIM.VirtualMachines
+      uri:
+        url: "https://{{ solarwinds_host }}:17774/SolarWinds/InformationService/v3/Json/Query"
+        method: POST
+        user: "{{ solarwinds_user }}"
+        password: "{{ solarwinds_pass }}"
+        force_basic_auth: yes
+        validate_certs: no
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          query: >
+            SELECT
+              N.NodeID, N.DNS, N.Caption, N.CustomProperties.InMaintenance AS NodeMaintenance,
+              VM.VMID, VM.DisplayName, VM.CustomProperties.InMaintenance AS VMMaintenance
+            FROM Orion.VIM.VirtualMachines AS VM
+            LEFT JOIN Orion.Nodes AS N ON N.IPAddress = VM.IPAddress
+            WHERE ToLower(VM.DisplayName) = '{{ vm_name | lower }}'
+      register: vm_lookup
+
+    - name: Fail if VM not found
+      fail:
+        msg: "VM '{{ vm_name }}' not found in SolarWinds"
+      when: vm_lookup.json.results | length == 0
+
+    - name: Set facts based on VM lookup
+      set_fact:
+        is_node: "{{ vm_lookup.json.results[0].NodeID is defined }}"
+        node_id: "{{ vm_lookup.json.results[0].NodeID | default(omit) }}"
+        vm_id: "{{ vm_lookup.json.results[0].VMID }}"
+        already_in_maintenance: >-
+          {{
+            (vm_lookup.json.results[0].NodeID is defined and
+             vm_lookup.json.results[0].NodeMaintenance == 'Yes') or
+            (vm_lookup.json.results[0].NodeID is not defined and
+             vm_lookup.json.results[0].VMMaintenance == 'Yes')
+          }}
+
+    - name: Debug current maintenance state
+      debug:
+        msg: >
+          VM is already in maintenance: {{ already_in_maintenance }}
+
+    - name: Set InMaintenance = 'Yes' for managed node
+      when:
+        - is_node
+        - not already_in_maintenance
+      uri:
+        url: "https://{{ solarwinds_host }}:17774/SolarWinds/InformationService/v3/Json/Invoke/Orion.Nodes/SetCustomProperty"
+        method: POST
+        user: "{{ solarwinds_user }}"
+        password: "{{ solarwinds_pass }}"
+        force_basic_auth: yes
+        validate_certs: no
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body: >
+          [ {{ node_id }}, "InMaintenance", "Yes" ]
+      register: set_node_maintenance
+
+    - name: Set InMaintenance = 'Yes' for discovered VM
+      when:
+        - not is_node
+        - not already_in_maintenance
+      uri:
+        url: "https://{{ solarwinds_host }}:17774/SolarWinds/InformationService/v3/Json/Invoke/Orion.VIM.VirtualMachines/SetCustomProperty"
+        method: POST
+        user: "{{ solarwinds_user }}"
+        password: "{{ solarwinds_pass }}"
+        force_basic_auth: yes
+        validate_certs: no
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body: >
+          [ "{{ vm_id }}", "InMaintenance", "Yes" ]
+      register: set_vm_maintenance
