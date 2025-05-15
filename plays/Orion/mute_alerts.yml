@@ -1,0 +1,75 @@
+---
+- name: Mute alerts for a VM or node in SolarWinds
+  hosts: localhost
+  vars:
+    solarwinds_host: "solarwinds.example.com"
+    solarwinds_user: "admin"
+    solarwinds_pass: "password"
+    vm_name: "vm123"  # short name or FQDN
+    suppress_duration_hours: 4
+
+  tasks:
+    - name: Lookup VM in Orion.VIM.VirtualMachines and Orion.Nodes
+      uri:
+        url: "https://{{ solarwinds_host }}:17774/SolarWinds/InformationService/v3/Json/Query"
+        method: POST
+        user: "{{ solarwinds_user }}"
+        password: "{{ solarwinds_pass }}"
+        force_basic_auth: yes
+        validate_certs: no
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          query: >
+            SELECT
+              N.NodeID, N.Uri AS NodeUri, N.DNS, N.Caption,
+              VM.VMID, VM.Uri AS VmUri, VM.DisplayName
+            FROM Orion.VIM.VirtualMachines AS VM
+            LEFT JOIN Orion.Nodes AS N ON N.IPAddress = VM.IPAddress
+            WHERE
+              ToLower(VM.DisplayName) LIKE '{{ vm_name | lower }}%'
+              OR ToLower(N.Caption) LIKE '{{ vm_name | lower }}%'
+              OR ToLower(N.DNS) LIKE '{{ vm_name | lower }}%'
+      register: vm_lookup
+
+    - name: Fail if no matching VM or node found
+      fail:
+        msg: "No matching VM or node found for '{{ vm_name }}'"
+      when: vm_lookup.json.results | length == 0
+
+    - name: Set entity_uri based on managed vs discovered
+      set_fact:
+        entity_uri: >-
+          {% if vm_lookup.json.results[0].NodeUri is defined %}
+            {{ vm_lookup.json.results[0].NodeUri }}
+          {% else %}
+            {{ vm_lookup.json.results[0].VmUri }}
+          {% endif %}
+
+    - name: Set suppression window timestamps
+      set_fact:
+        suppress_start: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        suppress_end: "{{ (ansible_date_time.iso8601 | to_datetime('%Y-%m-%dT%H:%M:%S') + timedelta(hours=suppress_duration_hours)).isoformat() }}Z"
+
+    - name: Suppress alerts via Orion.AlertSuppression
+      uri:
+        url: "https://{{ solarwinds_host }}:17774/SolarWinds/InformationService/v3/Json/Create/Orion.AlertSuppression"
+        method: POST
+        user: "{{ solarwinds_user }}"
+        password: "{{ solarwinds_pass }}"
+        force_basic_auth: yes
+        validate_certs: no
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          EntityUri: "{{ entity_uri }}"
+          SuppressedFrom: "{{ suppress_start }}"
+          SuppressedUntil: "{{ suppress_end }}"
+          Notes: "Suppressed by Ansible playbook for {{ suppress_duration_hours }} hours"
+      register: suppression_result
+
+    - name: Show suppression result
+      debug:
+        var: suppression_result.json
