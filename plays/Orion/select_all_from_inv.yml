@@ -16,8 +16,7 @@
     - name: Create SWQL-safe quoted hostname list
       set_fact:
         swql_name_list: >-
-          {{ all_vm_names | map('regex_replace', '^(.*)$', "'\\1'") | join(', ') }}
-
+          {{ all_vm_names | map('quote') | join(', ') }}
     - name: Build SWQL query string
       set_fact:
         swql_query: >-
