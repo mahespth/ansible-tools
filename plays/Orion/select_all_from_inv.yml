@@ -1,0 +1,50 @@
+---
+- name: Query SolarWinds for all hosts in inventory
+  hosts: localhost
+  gather_facts: no
+  vars:
+    solarwinds_host: "solarwinds.example.com"
+    solarwinds_user: "admin"
+    solarwinds_pass: "password"
+
+  tasks:
+
+    - name: Get list of hostnames from inventory
+      set_fact:
+        all_vm_names: "{{ groups['all'] | map('lower') | list }}"
+
+    - name: Create SWQL-safe quoted hostname list
+      set_fact:
+        swql_name_list: >-
+          {{ all_vm_names | map('regex_replace', '^(.*)$', "'\\1'") | join(', ') }}
+
+    - name: Build SWQL query string
+      set_fact:
+        swql_query: >-
+          SELECT
+            N.NodeID, N.Caption, N.DNS, N.Uri AS NodeUri,
+            VM.VMID, VM.DisplayName, VM.Uri AS VmUri
+          FROM Orion.VIM.VirtualMachines AS VM
+          LEFT JOIN Orion.Nodes AS N ON N.IPAddress = VM.IPAddress
+          WHERE ToLower(VM.DisplayName) IN ({{ swql_name_list }})
+             OR ToLower(N.Caption) IN ({{ swql_name_list }})
+             OR ToLower(N.DNS) IN ({{ swql_name_list }})
+
+    - name: Query SolarWinds for all matching hosts
+      uri:
+        url: "https://{{ solarwinds_host }}:17774/SolarWinds/InformationService/v3/Json/Query"
+        method: POST
+        user: "{{ solarwinds_user }}"
+        password: "{{ solarwinds_pass }}"
+        force_basic_auth: yes
+        validate_certs: no
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          query: "{{ swql_query }}"
+      register: solarwinds_results
+
+    - name: Print results from SolarWinds
+      debug:
+        var: solarwinds_results.json.results
