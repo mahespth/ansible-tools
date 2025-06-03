@@ -40,6 +40,6 @@ microdnf clean all
 
 # Restore State
 # ------------------------------------------------------------
-cp -pr /tmp/uib.repo /etc/yum.repos.d/ubi.repo
-
+mv /tmp/uib.repo /etc/yum.repos.d/ubi.repo
 rm /tmp/install.out
+
