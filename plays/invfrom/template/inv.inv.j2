@@ -13,7 +13,7 @@
 {% if ns.howmany > 0 and header                                              -%}
 [{{ type }}]
 {% endif                                                                     -%}
-{% if type == 'sanp'                                                         -%}
+{% if type == 'storep'                                                         -%}
 {%   for number in range(1, ns.howmany+1)                                    -%}
 {%     set host = '{}{}{}{:02d}'.format(phase, site, type, number)           -%}
 {%     set ip = ns.network.format(subnet) | ansible.utils.next_nth_usable(number-1) -%}
