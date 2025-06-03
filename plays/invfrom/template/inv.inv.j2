@@ -1,0 +1,40 @@
+# start of template #}
+{% macro hosts(phase,site,type,subnet,header=false)                          -%}
+{% set host_line=[]                                                          -%}
+{% set ns = namespace(howmany=components[type]['num'],network=components[type]['netfrom']) -%}
+{% if site_customisation[site][type] is defined                              -%}
+{%   if site_customisation[site][type]['num'] is defined                     -%}
+{%     set ns.howmany=site_customisation[site][type]['num']                  -%}
+{%   endif                                                                   -%}
+{%   if site_customisation[site][type]['netfrom'] is defined                 -%}
+{%     set ns.network=site_customisation[site][type]['netfrom']              -%}
+{%   endif                                                                   -%}
+{% endif                                                                     -%}
+{% if ns.howmany > 0 and header                                              -%}
+[{{ type }}]
+{% endif                                                                     -%}
+{% if type == 'sanp'                                                         -%}
+{%   for number in range(1, ns.howmany+1)                                    -%}
+{%     set host = '{}{}{}{:02d}'.format(phase, site, type, number)           -%}
+{%     set ip = ns.network.format(subnet) | ansible.utils.next_nth_usable(number-1) -%}
+{{ "{}a _awx_description='{} {}'".format(host,phase_name,site_name) }}
+{{ "{}b _awx_description='{} {}'".format(host,phase_name,site_name) }}
+{% endfor                                                                    -%}
+{% else                                                                      -%}
+{% for number in range(1, ns.howmany+1)                                      -%}
+{%   set host = '{}{}{}{:02d}'.format(phase, site, type, number)             -%}
+{%   set ip = ns.network.format(subnet) | ansible.utils.next_nth_usable(number-1) -%}
+{{ "{} _awx_description='{} {}'".format(host,phase_name,site_name) }}
+{% endfor                                                                    -%}
+{% endif                                                                     -%}
+{% endmacro                                                                  -%}
+
+[{{
+  "{}_{}".format(phase_name,site_name) | regex_replace('[\\s\\:\\(\\)-.]+', '_') | regex_replace('_(?=[^_]*$)', '') if phase == 'pp' else
+  "{}_{}".format(phase_name,site_name) | regex_replace('[\\s\\:\\(\\)-.]+', '_')
+  }}]
+{{ hosts(phase,site,'test',128) }}
+
+
+{{ hosts(phase,site,'test',128, true) }}
+
