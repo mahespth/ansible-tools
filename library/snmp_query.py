@@ -175,11 +175,22 @@ def compile_all_mibs_in_dir(mib_source, mib_output, module):
         module.fail_json(msg="compile_all_mibs requested, but 'pysmi' is not installed.")
     except Exception as e:
         module.fail_json(msg=f"Error during MIB compilation: {e}")
-      
-def snmp_walk(auth_data, host, port, oid, mib_path=None, resolve_names=False):
+
+def snmp_walk(auth_data, host, port, oids, mib_path=None, resolve_names=False):
     result = {}
-    obj_identity = parse_oid(oid)
-    if mib_path:
+        if isinstance(oids, str):
+        oids = [oids]
+
+    mib_view = None
+    if resolve_names:
+        mib_builder = builder.MibBuilder()
+        mib_builder.addMibSources(builder.DirMibSource(mib_path))
+        mib_view = view.MibViewController(mib_builder)
+
+    for oid in oids:
+        obj_identity = parse_oid(oid)
+        if mib_path:
+            obj_identity = obj_identity.addMibSource(mib_path)
         obj_identity = obj_identity.addMibSource(mib_path)
 
     mib_view = None
@@ -211,8 +222,8 @@ def snmp_walk(auth_data, host, port, oid, mib_path=None, resolve_names=False):
                     result[key] = val.prettyPrint()
                 except Exception:
                     result[str(name)] = val.prettyPrint()
-    return True, result
-  
+        return True, result
+      
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
                   v3_auth_proto='MD5', v3_priv_proto='DES'):
     if version in ['1', '2c']:
@@ -289,7 +300,7 @@ def main():
         value=dict(type='str', required=False),
         host=dict(type='str', required=True),
         port=dict(type='int', default=161),
-        oid=dict(type='str', required=True),
+        oid=dict(type='raw', required=True),
         operation=dict(type='str', choices=['get', 'walk'], default='get'),
         version=dict(type='str', choices=['1', '2c', '3'], default='2c'),
 
