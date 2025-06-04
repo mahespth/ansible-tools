@@ -102,7 +102,7 @@ https://github.com/bluecmd/python3-netsnmp/blob/master/netsnmp/client_intf.c
 
 
 
->>> snmpwalk('InfraPower-MIB::pduMainLoadVoltage', Version=3, DestHost='10.130.28.190', Community='public', AuthPass='y2mfoYotCfAcMV86', AuthProto='SHA', SecName='ngansible')
+>>> snmpwalk('InfraPower-MIB::pduMainLoadVoltage', Version=3, DestHost='1.1.28.1', Community='public', AuthPass='xxxxxxxxxxxxxxx', AuthProto='SHA', SecName='ansible')
 > /usr/local/lib64/python3.11/site-packages/netsnmp/client.py(277)snmpwalk()
 -> sess = Session(**kargs)
 (Pdb) n
