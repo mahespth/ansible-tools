@@ -109,43 +109,6 @@ result:
   type: dict
 '''
 
-#!/usr/bin/python
-
-'''
-Ansible module for querying SNMP devices using PySNMP (pure Python).
-Supports SNMPv1, v2c, and v3. Allows both GET and WALK operations.
-
-Optional support for compiling MIB files at runtime using PySMI.
-
-Parameters:
-  - host (str): Target SNMP device IP or hostname.
-  - port (int): SNMP UDP port (default: 161).
-  - oid (str): Object Identifier (e.g. 1.3.6.1... or MY-MIB::myObject).
-  - operation (str): 'get' or 'walk' (default: 'get').
-  - version (str): SNMP version ('1', '2c', or '3').
-
-SNMPv1/2c:
-  - community (str): SNMP community string.
-
-SNMPv3:
-  - v3_user (str): SNMPv3 username.
-  - v3_auth_key (str): SNMPv3 authentication key.
-  - v3_priv_key (str): SNMPv3 privacy key.
-  - v3_auth_proto (str): Authentication protocol (MD5, SHA, etc).
-  - v3_priv_proto (str): Privacy protocol (DES, AES, etc).
-
-MIB Compilation (optional):
-  - mib_path (str): Path to MIB files (source and compiled).
-  - compile_mibs (bool): Compile a single referenced MIB.
-  - compile_all_mibs (bool): Compile all MIBs in mib_path directory.
-
-Symbolic OID Resolution:
-  - resolve_names (bool): Return symbolic OIDs in results if MIBs are loaded (default: false).
-
-Returns:
-  - result (dict): Dictionary of OID-to-value pairs from SNMP.
-  - failure details if compilation or SNMP query fails.
-'''
 
 from ansible.module_utils.basic import AnsibleModule
 from pysnmp.hlapi import *
