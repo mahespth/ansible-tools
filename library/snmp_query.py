@@ -150,7 +150,7 @@ Returns:
 from ansible.module_utils.basic import AnsibleModule
 from pysnmp.hlapi import *
 from pysnmp.smi import builder, view
-from pysnmp.smi.rfc1902 import OctetString, Integer, ObjectName
+from pysnmp.proto.rfc1902 import OctetString, Integer, ObjectName
 import os
 
 def try_compile_mibs(mib_names, mib_source, mib_output, module):
