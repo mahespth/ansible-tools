@@ -31,3 +31,9 @@ sudo podman run --rm=false --name ansible-debug-container --env ANSIBLE_KEEP_REM
 sudo podman logs 2f7c
 
 
+[4295183.696998] ansible-playboo[1632377]: segfault at 0 ip 00007f3b1f724f1a sp 00007ffe927f15b0 error 6 in client_intf.cpython-311-x86_64-linux-gnu.so[7f3b1f723000+7000] likely on CPU 1 (core 0, socket 2)
+[4295183.697009] Code: 89 fc 55 48 85 d2 74 48 48 89 ca 48 8d 3d a2 5b 00 00 31 c0 e8 f7 ea ff ff 48 89 c5 48 89 ea 4c 89 ee 4c 89 e7 e8 46 e8 ff ff <48> 83 6d 00 01 74 0f 5d 41 5c 41 5d c3 66 0f 1f 84 00 00 00 00 00
+
+
+
+
