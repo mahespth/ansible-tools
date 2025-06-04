@@ -105,7 +105,6 @@ result:
 
 from ansible.module_utils.basic import AnsibleModule
 from pysnmp.hlapi import *
-
 import os
 
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
@@ -121,7 +120,6 @@ def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_ke
             'SHA384': usmHMAC256SHA384AuthProtocol,
             'SHA512': usmHMAC384SHA512AuthProtocol
         }
-
         priv_proto_map = {
             'DES': usmDESPrivProtocol,
             '3DES': usm3DESEDEPrivProtocol,
@@ -129,7 +127,6 @@ def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_ke
             'AES192': usmAesCfb192Protocol,
             'AES256': usmAesCfb256Protocol
         }
-
         return UsmUserData(
             v3_user,
             v3_auth_key,
@@ -154,7 +151,6 @@ def snmp_get(auth_data, host, port, oid, mib_path=None):
     )
 
     errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
-
     if errorIndication:
         return False, str(errorIndication)
     elif errorStatus:
@@ -195,25 +191,53 @@ def try_compile_mibs(mib_names, mib_source, mib_output, module):
         from pysmi.searcher.stub import StubSearcher
         from pysmi import debug
 
-        # Enable full debug logging to stderr
         debug.Debug('all')
 
-        compiler = MibCompiler(
-            parserFactory(),
-            PySnmpCodeGen(),
-            PyFileWriter(mib_output)
-        )
+        parser = parserFactory()()
+        compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
         compiler.addSources(FileReader(mib_source))
         compiler.addSearchers(StubSearcher(*mib_names))
 
         results = compiler.compile(*mib_names, noDeps=False)
-
-        failed = [k for k, v in results.items() if v != 'compiled']
+        failed = {k: v for k, v in results.items() if v != 'compiled'}
         if failed:
-            failure_reasons = {k: v for k, v in results.items() if v != 'compiled'}
-            module.fail_json(msg=f"Failed to compile MIBs: {failure_reasons}")
+            module.fail_json(msg="Failed to compile MIBs", details=failed)
+
     except ImportError:
         module.fail_json(msg="compile_mibs requested, but 'pysmi' is not installed.")
+    except Exception as e:
+        module.fail_json(msg=f"Error during MIB compilation: {e}")
+
+def compile_all_mibs_in_dir(mib_source, mib_output, module):
+    try:
+        from pysmi.reader.localfile import FileReader
+        from pysmi.writer.pyfile import PyFileWriter
+        from pysmi.parser.smi import parserFactory
+        from pysmi.codegen.pysnmp import PySnmpCodeGen
+        from pysmi.compiler import MibCompiler
+        from pysmi.searcher.stub import StubSearcher
+        from pysmi import debug
+
+        debug.Debug('all')
+
+        mib_files = [
+            f for f in os.listdir(mib_source)
+            if os.path.isfile(os.path.join(mib_source, f)) and f.endswith(('.txt', '.mib'))
+        ]
+        mib_names = [os.path.splitext(f)[0] for f in mib_files]
+
+        parser = parserFactory()()
+        compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
+        compiler.addSources(FileReader(mib_source))
+        compiler.addSearchers(StubSearcher(*mib_names))
+
+        results = compiler.compile(*mib_names, noDeps=False)
+        failed = {k: v for k, v in results.items() if v != 'compiled'}
+        if failed:
+            module.fail_json(msg="Failed to compile one or more MIBs", details=failed)
+
+    except ImportError:
+        module.fail_json(msg="compile_all_mibs requested, but 'pysmi' is not installed.")
     except Exception as e:
         module.fail_json(msg=f"Error during MIB compilation: {e}")
 
@@ -225,30 +249,34 @@ def main():
         operation=dict(type='str', choices=['get', 'walk'], default='get'),
         version=dict(type='str', choices=['1', '2c', '3'], default='2c'),
 
-        # SNMP v1/v2c
         community=dict(type='str', required=False, default='public', no_log=True),
-
-        # SNMP v3
         v3_user=dict(type='str', required=False),
         v3_auth_key=dict(type='str', required=False, no_log=True),
         v3_priv_key=dict(type='str', required=False, no_log=True),
         v3_auth_proto=dict(type='str', choices=['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'], default='MD5'),
         v3_priv_proto=dict(type='str', choices=['DES', '3DES', 'AES', 'AES192', 'AES256'], default='DES'),
 
-        # MIB support
         mib_path=dict(type='str', required=False),
         compile_mibs=dict(type='bool', default=False),
+        compile_all_mibs=dict(type='bool', default=False),
     )
 
     module = AnsibleModule(argument_spec=module_args, supports_check_mode=False)
 
     try:
         mib_path = module.params['mib_path']
-        if module.params['compile_mibs']:
+        if mib_path:
+            mib_path = os.path.abspath(mib_path)
+
+        if module.params['compile_mibs'] or module.params['compile_all_mibs']:
             if not mib_path:
-                module.fail_json(msg="compile_mibs is True but mib_path is not set")
-            mib_name = module.params['oid'].split("::")[0]
-            try_compile_mibs([mib_name], mib_path, mib_path, module)
+                module.fail_json(msg="MIB compilation requested but mib_path is not set")
+
+            if module.params['compile_all_mibs']:
+                compile_all_mibs_in_dir(mib_path, mib_path, module)
+            else:
+                mib_name = module.params['oid'].split("::")[0]
+                try_compile_mibs([mib_name], mib_path, mib_path, module)
 
         auth_data = get_auth_data(
             module.params['version'],
