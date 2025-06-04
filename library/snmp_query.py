@@ -212,7 +212,44 @@ def compile_all_mibs_in_dir(mib_source, mib_output, module):
         module.fail_json(msg="compile_all_mibs requested, but 'pysmi' is not installed.")
     except Exception as e:
         module.fail_json(msg=f"Error during MIB compilation: {e}")
+      
+def snmp_walk(auth_data, host, port, oid, mib_path=None, resolve_names=False):
+    result = {}
+    obj_identity = parse_oid(oid)
+    if mib_path:
+        obj_identity = obj_identity.addMibSource(mib_path)
 
+    mib_view = None
+    if resolve_names:
+        mib_builder = builder.MibBuilder()
+        mib_builder.addMibSources(builder.DirMibSource(mib_path))
+        mib_view = view.MibViewController(mib_builder)
+
+    for (errorIndication, errorStatus, errorIndex, varBinds) in nextCmd(
+        SnmpEngine(),
+        auth_data,
+        UdpTransportTarget((host, port)),
+        ContextData(),
+        ObjectType(obj_identity),
+        lexicographicMode=False
+    ):
+        if errorIndication:
+            return False, str(errorIndication)
+        elif errorStatus:
+            return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
+        else:
+            for name, val in varBinds:
+                try:
+                    if resolve_names and mib_view:
+                        sym = name.getMibSymbol()
+                        key = f"{sym[0]}::{sym[1]}.{'.'.join(map(str, sym[2]))}"
+                    else:
+                        key = str(name)
+                    result[key] = val.prettyPrint()
+                except Exception:
+                    result[str(name)] = val.prettyPrint()
+    return True, result
+  
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
                   v3_auth_proto='MD5', v3_priv_proto='DES'):
     if version in ['1', '2c']:
