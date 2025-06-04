@@ -14,3 +14,20 @@ snmpget -v3 -l noAuthNoPriv -u "" -n ""   \
 SNMP-FRAMEWORK-MIB::snmpEngineID.0 = Hex-STRING: 80 00 4F B8 05 24 6B
 
 
+# DEbug
+
+
+sudo podman run --rm=false --name ansible-debug-container --env ANSIBLE_KEEP_REMOTE_FILES=1 --env ANSIBLE_VERBOSITY=3 --env ANSIBLE_DEBUG=0 --env ANSIBLE_NOCOLOR=1 -v $HOME/.ansible/collections/ansible_collections/ansible/snmp:/usr/share/ansible/collections/ansible_collections/ansible/snmp -v $PWD:/home/ansible -it 3912 ansible-playbook /home/ansible/test_pb.yml
+podman start -ai ansible-debug-container
+podman mount ansible-debug-container
+cp -r /var/lib/containers/stroage/overlay/.../merged/root/.ansible/tmp /tmp/debug/tmp
+
+sudo podman run --rm=false --name ansible-debug-container --env ANSIBLE_KEEP_REMOTE_FILES=1 --env ANSIBLE_VERBOSITY=3 --env ANSIBLE_DEBUG=0 --env ANSIBLE_NOCOLOR=1 -v $HOME/.ansible/collections/ansible_collections/ansible/snmp:/usr/share/ansible/collections/ansible_collections/ansible/snmp -v $PWD:/home/ansible -it 3912 "ansible-playbook /home/ansible/test_pb.yml || true"
+
+ sudo podman run -d --replace --rm=false --name ansible-debug-container  --env ANSIBLE_KEEP_REMOTE_FILES=1 --env ANSIBLE_VERBOSITY=3 --env ANSIBLE_DEBUG=0 --env ANSIBLE_NOCOLOR=1 -v $HOME/.ansible/collections/ansible_collections/ansible/snmp:/usr/share/ansible/collections/ansible_collections/ansible/snmp -v $PWD:/home/ansible -it 3912 sh -c 'ansible-playbook /home/ansible/test_min.yml || true; tail -f /dev/null'
+
+16c19238601e39626393ac0e553209164b4f4ec9c5a8f2b49f0fe806c0df6100
+
+sudo podman logs 2f7c
+
+
