@@ -1,13 +1,137 @@
 #!/usr/bin/python
 
-"""
- @@SGM: Feb up with trying to get the native ansible snmp working as netsnmp core dumps
-        at the slightest issue on the session with no trace data so difficult to debug
+# -*- coding: utf-8 -*-
 
-  version: 1.0rc1
-  
-"""
+# Stephen Maher, AIXtreme Research Ltd.
+# (c) 2025 AIXTreme Research Ltd Licensed under the MIT License
 
+DOCUMENTATION = r'''
+---
+module: snmp_query
+
+short_description: Query SNMP-enabled devices using pysnmp (supports GET and WALK).
+
+version_added: "1.0"
+
+description:
+  - This module allows SNMP queries (GET or WALK) using the pure Python pysnmp library.
+  - Supports SNMP v1, v2c, and v3 with authentication and privacy protocols.
+  - Designed for use in Ansible playbooks without requiring libsnmp or Net-SNMP CLI tools.
+
+options:
+  host:
+    description:
+      - The IP address or hostname of the SNMP-enabled device.
+    required: true
+    type: str
+
+  port:
+    description:
+      - SNMP port on the remote device.
+    type: int
+    default: 161
+
+  oid:
+    description:
+      - The OID to query (can be a full or partial OID).
+    required: true
+    type: str
+
+  operation:
+    description:
+      - Whether to perform an SNMP GET or WALK operation.
+    type: str
+    choices: [get, walk]
+    default: get
+
+  version:
+    description:
+      - SNMP protocol version to use.
+    type: str
+    choices: [1, 2c, 3]
+    default: 2c
+
+  community:
+    description:
+      - SNMP community string (for v1 and v2c).
+    type: str
+    default: public
+
+  v3_user:
+    description:
+      - SNMPv3 username.
+    type: str
+
+  v3_auth_key:
+    description:
+      - SNMPv3 authentication password.
+    type: str
+    no_log: true
+
+  v3_priv_key:
+    description:
+      - SNMPv3 privacy (encryption) password.
+    type: str
+    no_log: true
+
+  v3_auth_proto:
+    description:
+      - SNMPv3 authentication protocol.
+    type: str
+    choices: [MD5, SHA, SHA224, SHA256, SHA384, SHA512]
+    default: MD5
+
+  v3_priv_proto:
+    description:
+      - SNMPv3 privacy protocol.
+    type: str
+    choices: [DES, 3DES, AES, AES192, AES256]
+    default: DES
+
+author:
+  - Stephen Maher (@mahespth) 
+'''
+
+EXAMPLES = r'''
+- name: SNMPv2c GET example
+  snmp_query:
+    host: 192.168.1.1
+    community: public
+    oid: 1.3.6.1.2.1.1.1.0
+    operation: get
+
+- name: SNMPv2c WALK example
+  snmp_query:
+    host: 192.168.1.1
+    community: public
+    oid: 1.3.6.1.2.1.1
+    operation: walk
+
+- name: SNMPv3 GET example
+  snmp_query:
+    host: 192.168.1.1
+    version: 3
+    v3_user: snmpuser
+    v3_auth_key: myauthpass
+    v3_priv_key: myprivpass
+    v3_auth_proto: SHA
+    v3_priv_proto: AES
+    oid: 1.3.6.1.2.1.1.1.0
+    operation: get
+'''
+
+RETURN = r'''
+result:
+  description: Dictionary of OID-value mappings retrieved from the SNMP device.
+  returned: success
+  type: dict
+  sample: {"1.3.6.1.2.1.1.1.0": "Linux mydevice 5.15.0"}
+
+msg:
+  description: Error message, if any.
+  returned: on failure
+  type: str
+'''
 
 from ansible.module_utils.basic import AnsibleModule
 from pysnmp.hlapi import *
