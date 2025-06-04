@@ -109,7 +109,6 @@ result:
   type: dict
 '''
 
-
 #!/usr/bin/python
 
 '''
@@ -151,6 +150,7 @@ Returns:
 from ansible.module_utils.basic import AnsibleModule
 from pysnmp.hlapi import *
 from pysnmp.smi import builder, view
+from pysnmp.smi.rfc1902 import OctetString, Integer, ObjectName
 import os
 
 def try_compile_mibs(mib_names, mib_source, mib_output, module):
@@ -253,8 +253,40 @@ def parse_oid(oid):
     else:
         return ObjectIdentity(oid)
 
+def coerce_snmp_value(value):
+    # Try to infer type
+    try:
+        int_val = int(value)
+        return Integer(int_val)
+    except ValueError:
+        return OctetString(value)
+
+def snmp_set(auth_data, host, port, oid, value, mib_path=None):
+    obj_identity = parse_oid(oid)
+    if mib_path:
+        obj_identity = obj_identity.addMibSource(mib_path)
+
+    iterator = setCmd(
+        SnmpEngine(),
+        auth_data,
+        UdpTransportTarget((host, port)),
+        ContextData(),
+        ObjectType(obj_identity, coerce_snmp_value(value))
+    )
+
+    errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
+
+    if errorIndication:
+        return False, str(errorIndication)
+    elif errorStatus:
+        return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
+    else:
+        result = {str(name): val.prettyPrint() for name, val in varBinds}
+        return True, result
+
 def main():
     module_args = dict(
+        value=dict(type='str', required=False),
         host=dict(type='str', required=True),
         port=dict(type='int', default=161),
         oid=dict(type='str', required=True),
@@ -287,6 +319,7 @@ def main():
 
             if module.params['compile_all_mibs']:
                 compile_all_mibs_in_dir(mib_path, mib_path, module)
+              
             else:
                 mib_name = module.params['oid'].split("::")[0]
                 try_compile_mibs([mib_name], mib_path, mib_path, module)
@@ -303,7 +336,10 @@ def main():
 
         resolve_names = module.params['resolve_names']
 
-        if module.params['operation'] == 'get':
+        if module.params['operation'] == 'set':
+            ok, result = snmp_set(auth_data, module.params['host'], module.params['port'],
+                                  module.params['oid'], module.params['value'], mib_path)
+        elif module.params['operation'] == 'get':
             ok, result = snmp_get(auth_data, module.params['host'], module.params['port'],
                                   module.params['oid'], mib_path, resolve_names)
         else:
