@@ -108,41 +108,51 @@ result:
   returned: success
   type: dict
 '''
+
+
+#!/usr/bin/python
+
+'''
+Ansible module for querying SNMP devices using PySNMP (pure Python).
+Supports SNMPv1, v2c, and v3. Allows both GET and WALK operations.
+
+Optional support for compiling MIB files at runtime using PySMI.
+
+Parameters:
+  - host (str): Target SNMP device IP or hostname.
+  - port (int): SNMP UDP port (default: 161).
+  - oid (str): Object Identifier (e.g. 1.3.6.1... or MY-MIB::myObject).
+  - operation (str): 'get' or 'walk' (default: 'get').
+  - version (str): SNMP version ('1', '2c', or '3').
+
+SNMPv1/2c:
+  - community (str): SNMP community string.
+
+SNMPv3:
+  - v3_user (str): SNMPv3 username.
+  - v3_auth_key (str): SNMPv3 authentication key.
+  - v3_priv_key (str): SNMPv3 privacy key.
+  - v3_auth_proto (str): Authentication protocol (MD5, SHA, etc).
+  - v3_priv_proto (str): Privacy protocol (DES, AES, etc).
+
+MIB Compilation (optional):
+  - mib_path (str): Path to MIB files (source and compiled).
+  - compile_mibs (bool): Compile a single referenced MIB.
+  - compile_all_mibs (bool): Compile all MIBs in mib_path directory.
+
+Symbolic OID Resolution:
+  - resolve_names (bool): Return symbolic OIDs in results if MIBs are loaded (default: false).
+
+Returns:
+  - result (dict): Dictionary of OID-to-value pairs from SNMP.
+  - failure details if compilation or SNMP query fails.
+'''
+
 from ansible.module_utils.basic import AnsibleModule
 from pysnmp.hlapi import *
 from pysnmp.smi import builder, view
 import os
 
-def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
-                  v3_auth_proto='MD5', v3_priv_proto='DES'):
-    if version in ['1', '2c']:
-        return CommunityData(community, mpModel=0 if version == '1' else 1)
-    elif version == '3':
-        auth_proto_map = {
-            'MD5': usmHMACMD5AuthProtocol,
-            'SHA': usmHMACSHAAuthProtocol,
-            'SHA224': usmHMAC128SHA224AuthProtocol,
-            'SHA256': usmHMAC192SHA256AuthProtocol,
-            'SHA384': usmHMAC256SHA384AuthProtocol,
-            'SHA512': usmHMAC384SHA512AuthProtocol
-        }
-        priv_proto_map = {
-            'DES': usmDESPrivProtocol,
-            '3DES': usm3DESEDEPrivProtocol,
-            'AES': usmAesCfb128Protocol,
-            'AES192': usmAesCfb192Protocol,
-            'AES256': usmAesCfb256Protocol
-        }
-        return UsmUserData(
-            v3_user,
-            v3_auth_key,
-            v3_priv_key,
-            authProtocol=auth_proto_map.get(v3_auth_proto.upper(), usmHMACMD5AuthProtocol),
-            privProtocol=priv_proto_map.get(v3_priv_proto.upper(), usmDESPrivProtocol)
-        )
-    else:
-        raise ValueError("Unsupported SNMP version")
-      
 def try_compile_mibs(mib_names, mib_source, mib_output, module):
     try:
         from pysmi.reader.localfile import FileReader
@@ -202,8 +212,39 @@ def compile_all_mibs_in_dir(mib_source, mib_output, module):
         module.fail_json(msg="compile_all_mibs requested, but 'pysmi' is not installed.")
     except Exception as e:
         module.fail_json(msg=f"Error during MIB compilation: {e}")
-      
+
+def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
+                  v3_auth_proto='MD5', v3_priv_proto='DES'):
+    if version in ['1', '2c']:
+        return CommunityData(community, mpModel=0 if version == '1' else 1)
+    elif version == '3':
+        auth_proto_map = {
+            'MD5': usmHMACMD5AuthProtocol,
+            'SHA': usmHMACSHAAuthProtocol,
+            'SHA224': usmHMAC128SHA224AuthProtocol,
+            'SHA256': usmHMAC192SHA256AuthProtocol,
+            'SHA384': usmHMAC256SHA384AuthProtocol,
+            'SHA512': usmHMAC384SHA512AuthProtocol
+        }
+        priv_proto_map = {
+            'DES': usmDESPrivProtocol,
+            '3DES': usm3DESEDEPrivProtocol,
+            'AES': usmAesCfb128Protocol,
+            'AES192': usmAesCfb192Protocol,
+            'AES256': usmAesCfb256Protocol
+        }
+        return UsmUserData(
+            v3_user,
+            v3_auth_key,
+            v3_priv_key,
+            authProtocol=auth_proto_map.get(v3_auth_proto.upper(), usmHMACMD5AuthProtocol),
+            privProtocol=priv_proto_map.get(v3_priv_proto.upper(), usmDESPrivProtocol)
+        )
+    else:
+        raise ValueError("Unsupported SNMP version")
+
 # Adjusted function to parse MIB-style OID strings
+
 def parse_oid(oid):
     if '::' in oid:
         parts = oid.split('::')
@@ -211,83 +252,6 @@ def parse_oid(oid):
         return ObjectIdentity(parts[0], *symbol)
     else:
         return ObjectIdentity(oid)
-
-def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False):
-    obj_identity = parse_oid(oid)
-    if mib_path:
-        obj_identity = obj_identity.addMibSource(mib_path)
-
-    if resolve_names:
-        mib_builder = builder.MibBuilder()
-        mib_view = view.MibViewController(mib_builder)
-        obj_identity = obj_identity.resolveWithMib(mib_view)
-
-    iterator = getCmd(
-        SnmpEngine(),
-        auth_data,
-        UdpTransportTarget((host, port)),
-        ContextData(),
-        ObjectType(obj_identity)
-    )
-
-    errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
-
-    if errorIndication:
-        return False, str(errorIndication)
-    elif errorStatus:
-        return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
-    else:
-        result = {}
-        for name, val in varBinds:
-            try:
-                if resolve_names:
-                    sym = name.getMibSymbol()
-                    key = f"{sym[0]}::{sym[1]}.{'.'.join(map(str, sym[2]))}"
-                else:
-                    key = str(name)
-                result[key] = val.prettyPrint()
-            except Exception:
-                result[str(name)] = val.prettyPrint()
-        return True, result
-
-def snmp_walk(auth_data, host, port, oid, mib_path=None, resolve_names=False):
-    result = {}
-    obj_identity = parse_oid(oid)
-    if mib_path:
-        obj_identity = obj_identity.addMibSource(mib_path)
-
-    mib_view = None
-    if resolve_names:
-        mib_builder = builder.MibBuilder()
-        mib_builder.addMibSources(builder.DirMibSource(mib_path))
-        mib_view = view.MibViewController(mib_builder)
-
-    for (errorIndication, errorStatus, errorIndex, varBinds) in nextCmd(
-        SnmpEngine(),
-        auth_data,
-        UdpTransportTarget((host, port)),
-        ContextData(),
-        ObjectType(obj_identity),
-        lexicographicMode=False
-    ):
-        if errorIndication:
-            return False, str(errorIndication)
-        elif errorStatus:
-            return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
-        else:
-            for name, val in varBinds:
-                try:
-                    if resolve_names and mib_view:
-                        sym = name.getMibSymbol()
-                        key = f"{sym[0]}::{sym[1]}.{'.'.join(map(str, sym[2]))}"
-                    else:
-                        key = str(name)
-                    result[key] = val.prettyPrint()
-                except Exception:
-                    result[str(name)] = val.prettyPrint()
-    return True, result
-
-# main() remains the same but with added resolve_names param
 
 def main():
     module_args = dict(
