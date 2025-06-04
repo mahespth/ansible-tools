@@ -193,7 +193,10 @@ def try_compile_mibs(mib_names, mib_source, mib_output, module):
         from pysmi.codegen.pysnmp import PySnmpCodeGen
         from pysmi.compiler import MibCompiler
         from pysmi.searcher.stub import StubSearcher
-        from pysmi.borrower.pyfile import PyFileBorrower
+        from pysmi import debug
+
+        # Enable full debug logging to stderr
+        debug.Debug('all')
 
         compiler = MibCompiler(
             parserFactory(),
@@ -202,12 +205,13 @@ def try_compile_mibs(mib_names, mib_source, mib_output, module):
         )
         compiler.addSources(FileReader(mib_source))
         compiler.addSearchers(StubSearcher(*mib_names))
-        compiler.addBorrowers(PyFileBorrower(mib_output).setBorrowers())
 
         results = compiler.compile(*mib_names, noDeps=False)
+
         failed = [k for k, v in results.items() if v != 'compiled']
         if failed:
-            module.fail_json(msg=f"Failed to compile MIBs: {failed}")
+            failure_reasons = {k: v for k, v in results.items() if v != 'compiled'}
+            module.fail_json(msg=f"Failed to compile MIBs: {failure_reasons}")
     except ImportError:
         module.fail_json(msg="compile_mibs requested, but 'pysmi' is not installed.")
     except Exception as e:
