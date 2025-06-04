@@ -35,5 +35,105 @@ sudo podman logs 2f7c
 [4295183.697009] Code: 89 fc 55 48 85 d2 74 48 48 89 ca 48 8d 3d a2 5b 00 00 31 c0 e8 f7 ea ff ff 48 89 c5 48 89 ea 4c 89 ee 4c 89 e7 e8 46 e8 ff ff <48> 83 6d 00 01 74 0f 5d 41 5c 41 5d c3 66 0f 1f 84 00 00 00 00 00
 
 
+bash-5.1# ls -l
+total 176
+-rw-r--r--. 1 root root     22 Jun  3 17:41 __init__.py
+drwxr-xr-x. 2 root root     68 Jun  3 17:41 __pycache__
+-rw-r--r--. 1 root root   8246 Jun  3 17:41 client.py
+-rwxr-xr-x. 1 root root 159776 Jun  3 17:41 client_intf.cpython-311-x86_64-linux-gnu.so
+drwxr-xr-x. 3 root root     59 Jun  3 17:41 tests
+bash-5.1# ldff client_intf.cpython-311-x86_64-linux-gnu.so
+bash: ldff: command not found
+bash-5.1# ldd client_intf.cpython-311-x86_64-linux-gnu.so
+        linux-vdso.so.1 (0x00007ffee1fc5000)
+        libnetsnmp.so.40 => /lib64/libnetsnmp.so.40 (0x00007fe6e7138000)
+        libc.so.6 => /lib64/libc.so.6 (0x00007fe6e6f30000)
+        libm.so.6 => /lib64/libm.so.6 (0x00007fe6e6e55000)
+        libssl.so.3 => /lib64/libssl.so.3 (0x00007fe6e6d6f000)
+        libcrypto.so.3 => /lib64/libcrypto.so.3 (0x00007fe6e6856000)
+        /lib64/ld-linux-x86-64.so.2 (0x00007fe6e7235000)
+        libz.so.1 => /lib64/libz.so.1 (0x00007fe6e683c000)
+
+
+
+bash-5.1# ldd /lib64/libnetsnmp.so.40
+        linux-vdso.so.1 (0x00007ffe69f16000)
+        libm.so.6 => /lib64/libm.so.6 (0x00007fe7b01d3000)
+        libssl.so.3 => /lib64/libssl.so.3 (0x00007fe7b00ed000)
+        libcrypto.so.3 => /lib64/libcrypto.so.3 (0x00007fe7afbd4000)
+        libc.so.6 => /lib64/libc.so.6 (0x00007fe7af9cc000)
+        /lib64/ld-linux-x86-64.so.2 (0x00007fe7b039d000)
+        libz.so.1 => /lib64/libz.so.1 (0x00007fe7af9b2000)
+
+
+bash-5.1# export PYTHONPATH=/usr/local/lib64/python3.11/site-packages$PYTHONPATH
+
+
+bash-5.1# export PYTHONPATH=/usr/local/lib64/python3.11/site-packages$PYTHONPATH
+bash-5.1# python3
+Python 3.9.21 (main, Dec  5 2024, 00:00:00)
+[GCC 11.5.0 20240719 (Red Hat 11.5.0-2)] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import sys
+>>> sys.modules
+{'sys': <module 'sys' (built-in)>, 'builtins': <module 'builtins' (built-in)>, '_frozen_importlib': <module '_frozen_importlib' (frozen)>, '_imp': <module '_imp' (built-in)>, '_thread': <module '_thread' (built-in)>, '_warnings': <module '_warnings' (built-in)>, '_weakref': <module '_weakref' (built-in)>, '_io': <module 'io' (built-in)>, 'marshal': <module 'marshal' (built-in)>, 'posix': <module 'posix' (built-in)>, '_frozen_importlib_external': <module '_frozen_importlib_external' (frozen)>, 'time': <module 'time' (built-in)>, 'zipimport': <module 'zipimport' (frozen)>, '_codecs': <module '_codecs' (built-in)>, 'codecs': <module 'codecs' from '/usr/lib64/python3.9/codecs.py'>, 'encodings.aliases': <module 'encodings.aliases' from '/usr/lib64/python3.9/encodings/aliases.py'>, 'encodings': <module 'encodings' from '/usr/lib64/python3.9/encodings/__init__.py'>, 'encodings.utf_8': <module 'encodings.utf_8' from '/usr/lib64/python3.9/encodings/utf_8.py'>, '_signal': <module '_signal' (built-in)>, 'encodings.latin_1': <module 'encodings.latin_1' from '/usr/lib64/python3.9/encodings/latin_1.py'>, '_abc': <module '_abc' (built-in)>, 'abc': <module 'abc' from '/usr/lib64/python3.9/abc.py'>, 'io': <module 'io' from '/usr/lib64/python3.9/io.py'>, '__main__': <module '__main__' (built-in)>, '_stat': <module '_stat' (built-in)>, 'stat': <module 'stat' from '/usr/lib64/python3.9/stat.py'>, '_collections_abc': <module '_collections_abc' from '/usr/lib64/python3.9/_collections_abc.py'>, 'genericpath': <module 'genericpath' from '/usr/lib64/python3.9/genericpath.py'>, 'posixpath': <module 'posixpath' from '/usr/lib64/python3.9/posixpath.py'>, 'os.path': <module 'posixpath' from '/usr/lib64/python3.9/posixpath.py'>, 'os': <module 'os' from '/usr/lib64/python3.9/os.py'>, '_sitebuiltins': <module '_sitebuiltins' from '/usr/lib64/python3.9/_sitebuiltins.py'>, '_locale': <module '_locale' (built-in)>, '_bootlocale': <module '_bootlocale' from '/usr/lib64/python3.9/_bootlocale.py'>, 'site': <module 'site' from '/usr/lib64/python3.9/site.py'>, 'readline': <module 'readline' from '/usr/lib64/python3.9/lib-dynload/readline.cpython-39-x86_64-linux-gnu.so'>, 'atexit': <module 'atexit' (built-in)>, 'rlcompleter': <module 'rlcompleter' from '/usr/lib64/python3.9/rlcompleter.py'>}
+>>> import client_intf
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+ModuleNotFoundError: No module named 'client_intf'
+
+>>> sys.path
+['', '/usr/local/lib64/python3.11/site-packages', '/usr/lib64/python39.zip', '/usr/lib64/python3.9', '/usr/lib64/python3.9/lib-dynload', '/usr/lib64/python3.9/site-packages', '/usr/lib/python3.9/site-packages']
+
+bash-5.1# python3 -v -c "import client_intf"
+
+
+bash-5.1# python3.11
+Python 3.11.11 (main, Feb 10 2025, 00:00:00) [GCC 11.5.0 20240719 (Red Hat 11.5.0-5)] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import client_intf
+>>> print(client_intf)
+<module 'client_intf' from '/usr/local/lib64/python3.11/site-packages/netsnmp/client_intf.cpython-311-x86_64-linux-gnu.so'>
+
+https://github.com/bluecmd/python3-netsnmp/blob/master/netsnmp/client_intf.c
+
+
+
+
+
+
+>>> snmpwalk('InfraPower-MIB::pduMainLoadVoltage', Version=3, DestHost='10.130.28.190', Community='public', AuthPass='y2mfoYotCfAcMV86', AuthProto='SHA', SecName='ngansible')
+> /usr/local/lib64/python3.11/site-packages/netsnmp/client.py(277)snmpwalk()
+-> sess = Session(**kargs)
+(Pdb) n
+> /usr/local/lib64/python3.11/site-packages/netsnmp/client.py(278)snmpwalk()
+-> if isinstance(args[0], netsnmp.client.VarList):
+(Pdb)
+> /usr/local/lib64/python3.11/site-packages/netsnmp/client.py(281)snmpwalk()
+-> var_list = VarList()
+(Pdb)
+> /usr/local/lib64/python3.11/site-packages/netsnmp/client.py(282)snmpwalk()
+-> for arg in args:
+(Pdb)
+> /usr/local/lib64/python3.11/site-packages/netsnmp/client.py(283)snmpwalk()
+-> if isinstance(arg, netsnmp.client.Varbind):
+(Pdb)
+> /usr/local/lib64/python3.11/site-packages/netsnmp/client.py(286)snmpwalk()
+-> var_list.append(Varbind(arg))
+(Pdb)
+> /usr/local/lib64/python3.11/site-packages/netsnmp/client.py(282)snmpwalk()
+-> for arg in args:
+(Pdb)
+> /usr/local/lib64/python3.11/site-packages/netsnmp/client.py(287)snmpwalk()
+-> res = sess.walk(var_list)
+(Pdb)
+Segmentation fault (core dumped)
+
+[<netsnmp.client.Varbind object at 0x7fc038a19590>]
+(Pdb) dir(var_list)
+['__class__', '__delattr__', '__delitem__', '__dict__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__getitem__', '__getslice__', '__getstate__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__iter__', '__le__', '__len__', '__lt__', '__module__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__setattr__', '__setitem__', '__sizeof__', '__str__', '__subclasshook__', '__weakref__', 'append', 'varbinds']
+(Pdb) n
+Segmentation fault (core dumped)
+
 
 
