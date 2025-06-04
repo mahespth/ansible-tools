@@ -113,8 +113,67 @@ from pysnmp.hlapi import *
 from pysnmp.smi import builder, view
 import os
 
-# Adjusted function to parse MIB-style OID strings
+def try_compile_mibs(mib_names, mib_source, mib_output, module):
+    try:
+        from pysmi.reader.localfile import FileReader
+        from pysmi.writer.pyfile import PyFileWriter
+        from pysmi.parser.smi import parserFactory
+        from pysmi.codegen.pysnmp import PySnmpCodeGen
+        from pysmi.compiler import MibCompiler
+        from pysmi.searcher.stub import StubSearcher
+        from pysmi import debug
 
+        debug.Debug('all')
+
+        parser = parserFactory()()
+        compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
+        compiler.addSources(FileReader(mib_source))
+        compiler.addSearchers(StubSearcher(*mib_names))
+
+        results = compiler.compile(*mib_names, noDeps=False)
+        failed = {k: v for k, v in results.items() if v != 'compiled'}
+        if failed:
+            module.fail_json(msg="Failed to compile MIBs", details=failed)
+
+    except ImportError:
+        module.fail_json(msg="compile_mibs requested, but 'pysmi' is not installed.")
+    except Exception as e:
+        module.fail_json(msg=f"Error during MIB compilation: {e}")
+
+def compile_all_mibs_in_dir(mib_source, mib_output, module):
+    try:
+        from pysmi.reader.localfile import FileReader
+        from pysmi.writer.pyfile import PyFileWriter
+        from pysmi.parser.smi import parserFactory
+        from pysmi.codegen.pysnmp import PySnmpCodeGen
+        from pysmi.compiler import MibCompiler
+        from pysmi.searcher.stub import StubSearcher
+        from pysmi import debug
+
+        debug.Debug('all')
+
+        mib_files = [
+            f for f in os.listdir(mib_source)
+            if os.path.isfile(os.path.join(mib_source, f)) and f.endswith(('.txt', '.mib'))
+        ]
+        mib_names = [os.path.splitext(f)[0] for f in mib_files]
+
+        parser = parserFactory()()
+        compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
+        compiler.addSources(FileReader(mib_source))
+        compiler.addSearchers(StubSearcher(*mib_names))
+
+        results = compiler.compile(*mib_names, noDeps=False)
+        failed = {k: v for k, v in results.items() if v != 'compiled'}
+        if failed:
+            module.fail_json(msg="Failed to compile one or more MIBs", details=failed)
+
+    except ImportError:
+        module.fail_json(msg="compile_all_mibs requested, but 'pysmi' is not installed.")
+    except Exception as e:
+        module.fail_json(msg=f"Error during MIB compilation: {e}")
+      
+# Adjusted function to parse MIB-style OID strings
 def parse_oid(oid):
     if '::' in oid:
         parts = oid.split('::')
