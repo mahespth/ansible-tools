@@ -1,0 +1,14 @@
+- name: Test SNMP v2c walk
+  hosts: localhost
+  tasks:
+    - name: Walk sysName
+      snmp_query:
+        host: 192.168.1.1
+        community: public
+        version: 2c
+        oid: 1.3.6.1.2.1.1
+        operation: walk
+      register: snmp_result
+
+    - debug:
+        var: snmp_result.result
