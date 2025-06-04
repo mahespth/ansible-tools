@@ -134,7 +134,7 @@ def try_compile_mibs(mib_names, mib_source, mib_output, module):
         compiler.addSearchers(StubSearcher(*mib_names))
 
         results = compiler.compile(*mib_names, noDeps=False)
-        failed = {k: v for k, v in results.items() if v != 'compiled'}
+        failed = {k: v for k, v in results.items() if v not in ['compiled','untouched'] }
         if failed:
             module.fail_json(msg="Failed to compile MIBs", details=failed)
 
@@ -167,7 +167,7 @@ def compile_all_mibs_in_dir(mib_source, mib_output, module):
         compiler.addSearchers(StubSearcher(*mib_names))
 
         results = compiler.compile(*mib_names, noDeps=False)
-        failed = {k: v for k, v in results.items() if v != 'compiled'}
+        failed = {k: v for k, v in results.items() if v not in ['compiled','untouched'] }
         if failed:
             module.fail_json(msg="Failed to compile one or more MIBs", details=failed)
 
