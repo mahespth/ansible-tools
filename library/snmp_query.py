@@ -16,107 +16,83 @@ version_added: "1.0"
 description:
   - This module allows SNMP queries (GET or WALK) using the pure Python pysnmp library.
   - Supports SNMP v1, v2c, and v3 with authentication and privacy protocols.
-  - Designed for use in Ansible playbooks without requiring libsnmp or Net-SNMP CLI tools.
+  - Can resolve symbolic MIB names from a user-specified directory.
 
 options:
   host:
-    description:
-      - The IP address or hostname of the SNMP-enabled device.
+    description: The IP address or hostname of the SNMP-enabled device.
     required: true
     type: str
 
   port:
-    description:
-      - SNMP port on the remote device.
+    description: SNMP port on the remote device.
     type: int
     default: 161
 
   oid:
-    description:
-      - The OID to query (can be a full or partial OID).
+    description: The OID to query (can be numeric or symbolic like SNMPv2-MIB::sysDescr.0).
     required: true
     type: str
 
   operation:
-    description:
-      - Whether to perform an SNMP GET or WALK operation.
+    description: Whether to perform an SNMP GET or WALK operation.
     type: str
     choices: [get, walk]
     default: get
 
   version:
-    description:
-      - SNMP protocol version to use.
+    description: SNMP protocol version to use.
     type: str
     choices: [1, 2c, 3]
     default: 2c
 
   community:
-    description:
-      - SNMP community string (for v1 and v2c).
+    description: SNMP community string (for v1 and v2c).
     type: str
     default: public
 
   v3_user:
-    description:
-      - SNMPv3 username.
+    description: SNMPv3 username.
     type: str
 
   v3_auth_key:
-    description:
-      - SNMPv3 authentication password.
+    description: SNMPv3 authentication password.
     type: str
     no_log: true
 
   v3_priv_key:
-    description:
-      - SNMPv3 privacy (encryption) password.
+    description: SNMPv3 privacy (encryption) password.
     type: str
     no_log: true
 
   v3_auth_proto:
-    description:
-      - SNMPv3 authentication protocol.
+    description: SNMPv3 authentication protocol.
     type: str
     choices: [MD5, SHA, SHA224, SHA256, SHA384, SHA512]
     default: MD5
 
   v3_priv_proto:
-    description:
-      - SNMPv3 privacy protocol.
+    description: SNMPv3 privacy protocol.
     type: str
     choices: [DES, 3DES, AES, AES192, AES256]
     default: DES
 
+  mib_path:
+    description: Optional directory path to load custom MIBs.
+    type: str
+    required: false
+
 author:
-  - Stephen Maher (@mahespth) 
+  - Stephen Maher (@mahespth)
 '''
 
 EXAMPLES = r'''
-- name: SNMPv2c GET example
+- name: SNMPv2c GET with MIB path
   snmp_query:
     host: 192.168.1.1
     community: public
-    oid: 1.3.6.1.2.1.1.1.0
-    operation: get
-
-- name: SNMPv2c WALK example
-  snmp_query:
-    host: 192.168.1.1
-    community: public
-    oid: 1.3.6.1.2.1.1
-    operation: walk
-
-- name: SNMPv3 GET example
-  snmp_query:
-    host: 192.168.1.1
-    version: 3
-    v3_user: snmpuser
-    v3_auth_key: myauthpass
-    v3_priv_key: myprivpass
-    v3_auth_proto: SHA
-    v3_priv_proto: AES
-    oid: 1.3.6.1.2.1.1.1.0
+    oid: SNMPv2-MIB::sysDescr.0
+    mib_path: /home/user/.snmp/mibs
     operation: get
 '''
 
@@ -125,16 +101,11 @@ result:
   description: Dictionary of OID-value mappings retrieved from the SNMP device.
   returned: success
   type: dict
-  sample: {"1.3.6.1.2.1.1.1.0": "Linux mydevice 5.15.0"}
-
-msg:
-  description: Error message, if any.
-  returned: on failure
-  type: str
 '''
 
 from ansible.module_utils.basic import AnsibleModule
 from pysnmp.hlapi import *
+from pysnmp.smi import builder, view
 
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
                   v3_auth_proto='MD5', v3_priv_proto='DES'):
@@ -149,7 +120,6 @@ def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_ke
             'SHA384': usmHMAC256SHA384AuthProtocol,
             'SHA512': usmHMAC384SHA512AuthProtocol
         }
-
         priv_proto_map = {
             'DES': usmDESPrivProtocol,
             '3DES': usm3DESEDEPrivProtocol,
@@ -157,7 +127,6 @@ def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_ke
             'AES192': usmAesCfb192Protocol,
             'AES256': usmAesCfb256Protocol
         }
-
         return UsmUserData(
             v3_user,
             v3_auth_key,
@@ -168,17 +137,25 @@ def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_ke
     else:
         raise ValueError("Unsupported SNMP version")
 
-def snmp_get(auth_data, host, port, oid):
+def resolve_oid(oid, mib_path=None):
+    identity = ObjectIdentity(oid)
+    if mib_path:
+        mib_builder = builder.MibBuilder()
+        mib_builder.addMibSources(builder.DirMibSource(mib_path))
+        mib_view = view.MibViewController(mib_builder)
+        identity = identity.addMibSource(mib_path).resolveWithMib(mib_view)
+    return identity
+
+def snmp_get(auth_data, host, port, oid, mib_path=None):
+    identity = resolve_oid(oid, mib_path)
     iterator = getCmd(
         SnmpEngine(),
         auth_data,
         UdpTransportTarget((host, port)),
         ContextData(),
-        ObjectType(ObjectIdentity(oid))
+        ObjectType(identity)
     )
-
     errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
-
     if errorIndication:
         return False, str(errorIndication)
     elif errorStatus:
@@ -186,14 +163,15 @@ def snmp_get(auth_data, host, port, oid):
     else:
         return True, {str(name): val.prettyPrint() for name, val in varBinds}
 
-def snmp_walk(auth_data, host, port, oid):
+def snmp_walk(auth_data, host, port, oid, mib_path=None):
+    identity = resolve_oid(oid, mib_path)
     result = {}
     for (errorIndication, errorStatus, errorIndex, varBinds) in nextCmd(
         SnmpEngine(),
         auth_data,
         UdpTransportTarget((host, port)),
         ContextData(),
-        ObjectType(ObjectIdentity(oid)),
+        ObjectType(identity),
         lexicographicMode=False
     ):
         if errorIndication:
@@ -212,16 +190,13 @@ def main():
         oid=dict(type='str', required=True),
         operation=dict(type='str', choices=['get', 'walk'], default='get'),
         version=dict(type='str', choices=['1', '2c', '3'], default='2c'),
-
-        # SNMP v1/v2c
         community=dict(type='str', required=False, default='public', no_log=True),
-
-        # SNMP v3
         v3_user=dict(type='str', required=False),
         v3_auth_key=dict(type='str', required=False, no_log=True),
         v3_priv_key=dict(type='str', required=False, no_log=True),
         v3_auth_proto=dict(type='str', choices=['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'], default='MD5'),
         v3_priv_proto=dict(type='str', choices=['DES', '3DES', 'AES', 'AES192', 'AES256'], default='DES'),
+        mib_path=dict(type='str', required=False)
     )
 
     module = AnsibleModule(argument_spec=module_args, supports_check_mode=False)
@@ -238,9 +213,9 @@ def main():
         )
 
         if module.params['operation'] == 'get':
-            ok, result = snmp_get(auth_data, module.params['host'], module.params['port'], module.params['oid'])
+            ok, result = snmp_get(auth_data, module.params['host'], module.params['port'], module.params['oid'], module.params['mib_path'])
         else:
-            ok, result = snmp_walk(auth_data, module.params['host'], module.params['port'], module.params['oid'])
+            ok, result = snmp_walk(auth_data, module.params['host'], module.params['port'], module.params['oid'], module.params['mib_path'])
 
         if ok:
             module.exit_json(changed=False, result=result)
