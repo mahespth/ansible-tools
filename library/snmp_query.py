@@ -113,6 +113,36 @@ from pysnmp.hlapi import *
 from pysnmp.smi import builder, view
 import os
 
+def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
+                  v3_auth_proto='MD5', v3_priv_proto='DES'):
+    if version in ['1', '2c']:
+        return CommunityData(community, mpModel=0 if version == '1' else 1)
+    elif version == '3':
+        auth_proto_map = {
+            'MD5': usmHMACMD5AuthProtocol,
+            'SHA': usmHMACSHAAuthProtocol,
+            'SHA224': usmHMAC128SHA224AuthProtocol,
+            'SHA256': usmHMAC192SHA256AuthProtocol,
+            'SHA384': usmHMAC256SHA384AuthProtocol,
+            'SHA512': usmHMAC384SHA512AuthProtocol
+        }
+        priv_proto_map = {
+            'DES': usmDESPrivProtocol,
+            '3DES': usm3DESEDEPrivProtocol,
+            'AES': usmAesCfb128Protocol,
+            'AES192': usmAesCfb192Protocol,
+            'AES256': usmAesCfb256Protocol
+        }
+        return UsmUserData(
+            v3_user,
+            v3_auth_key,
+            v3_priv_key,
+            authProtocol=auth_proto_map.get(v3_auth_proto.upper(), usmHMACMD5AuthProtocol),
+            privProtocol=priv_proto_map.get(v3_priv_proto.upper(), usmDESPrivProtocol)
+        )
+    else:
+        raise ValueError("Unsupported SNMP version")
+      
 def try_compile_mibs(mib_names, mib_source, mib_output, module):
     try:
         from pysmi.reader.localfile import FileReader
