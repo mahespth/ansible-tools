@@ -77,6 +77,12 @@ options:
     choices: [DES, 3DES, AES, AES192, AES256]
     default: DES
 
+  resolve_names:
+    description: Resolve names
+    type: bool
+    default: false
+    required: false  
+    
   mib_path:
     description: Optional directory path to load custom MIBs.
     type: str
@@ -102,45 +108,30 @@ result:
   returned: success
   type: dict
 '''
-
 from ansible.module_utils.basic import AnsibleModule
 from pysnmp.hlapi import *
+from pysnmp.smi import builder, view
 import os
 
-def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
-                  v3_auth_proto='MD5', v3_priv_proto='DES'):
-    if version in ['1', '2c']:
-        return CommunityData(community, mpModel=0 if version == '1' else 1)
-    elif version == '3':
-        auth_proto_map = {
-            'MD5': usmHMACMD5AuthProtocol,
-            'SHA': usmHMACSHAAuthProtocol,
-            'SHA224': usmHMAC128SHA224AuthProtocol,
-            'SHA256': usmHMAC192SHA256AuthProtocol,
-            'SHA384': usmHMAC256SHA384AuthProtocol,
-            'SHA512': usmHMAC384SHA512AuthProtocol
-        }
-        priv_proto_map = {
-            'DES': usmDESPrivProtocol,
-            '3DES': usm3DESEDEPrivProtocol,
-            'AES': usmAesCfb128Protocol,
-            'AES192': usmAesCfb192Protocol,
-            'AES256': usmAesCfb256Protocol
-        }
-        return UsmUserData(
-            v3_user,
-            v3_auth_key,
-            v3_priv_key,
-            authProtocol=auth_proto_map.get(v3_auth_proto.upper(), usmHMACMD5AuthProtocol),
-            privProtocol=priv_proto_map.get(v3_priv_proto.upper(), usmDESPrivProtocol)
-        )
-    else:
-        raise ValueError("Unsupported SNMP version")
+# Adjusted function to parse MIB-style OID strings
 
-def snmp_get(auth_data, host, port, oid, mib_path=None):
-    obj_identity = ObjectIdentity(oid)
+def parse_oid(oid):
+    if '::' in oid:
+        parts = oid.split('::')
+        symbol = parts[1].split('.')
+        return ObjectIdentity(parts[0], *symbol)
+    else:
+        return ObjectIdentity(oid)
+
+def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False):
+    obj_identity = parse_oid(oid)
     if mib_path:
         obj_identity = obj_identity.addMibSource(mib_path)
+
+    if resolve_names:
+        mib_builder = builder.MibBuilder()
+        mib_view = view.MibViewController(mib_builder)
+        obj_identity = obj_identity.resolveWithMib(mib_view)
 
     iterator = getCmd(
         SnmpEngine(),
@@ -151,18 +142,36 @@ def snmp_get(auth_data, host, port, oid, mib_path=None):
     )
 
     errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
+
     if errorIndication:
         return False, str(errorIndication)
     elif errorStatus:
         return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
     else:
-        return True, {str(name): val.prettyPrint() for name, val in varBinds}
+        result = {}
+        for name, val in varBinds:
+            try:
+                if resolve_names:
+                    sym = name.getMibSymbol()
+                    key = f"{sym[0]}::{sym[1]}.{'.'.join(map(str, sym[2]))}"
+                else:
+                    key = str(name)
+                result[key] = val.prettyPrint()
+            except Exception:
+                result[str(name)] = val.prettyPrint()
+        return True, result
 
-def snmp_walk(auth_data, host, port, oid, mib_path=None):
+def snmp_walk(auth_data, host, port, oid, mib_path=None, resolve_names=False):
     result = {}
-    obj_identity = ObjectIdentity(oid)
+    obj_identity = parse_oid(oid)
     if mib_path:
         obj_identity = obj_identity.addMibSource(mib_path)
+
+    mib_view = None
+    if resolve_names:
+        mib_builder = builder.MibBuilder()
+        mib_builder.addMibSources(builder.DirMibSource(mib_path))
+        mib_view = view.MibViewController(mib_builder)
 
     for (errorIndication, errorStatus, errorIndex, varBinds) in nextCmd(
         SnmpEngine(),
@@ -178,68 +187,18 @@ def snmp_walk(auth_data, host, port, oid, mib_path=None):
             return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
         else:
             for name, val in varBinds:
-                result[str(name)] = val.prettyPrint()
+                try:
+                    if resolve_names and mib_view:
+                        sym = name.getMibSymbol()
+                        key = f"{sym[0]}::{sym[1]}.{'.'.join(map(str, sym[2]))}"
+                    else:
+                        key = str(name)
+                    result[key] = val.prettyPrint()
+                except Exception:
+                    result[str(name)] = val.prettyPrint()
     return True, result
 
-def try_compile_mibs(mib_names, mib_source, mib_output, module):
-    try:
-        from pysmi.reader.localfile import FileReader
-        from pysmi.writer.pyfile import PyFileWriter
-        from pysmi.parser.smi import parserFactory
-        from pysmi.codegen.pysnmp import PySnmpCodeGen
-        from pysmi.compiler import MibCompiler
-        from pysmi.searcher.stub import StubSearcher
-        from pysmi import debug
-
-        debug.Debug('all')
-
-        parser = parserFactory()()
-        compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
-        compiler.addSources(FileReader(mib_source))
-        compiler.addSearchers(StubSearcher(*mib_names))
-
-        results = compiler.compile(*mib_names, noDeps=False)
-        failed = {k: v for k, v in results.items() if v != 'compiled'}
-        if failed:
-            module.fail_json(msg="Failed to compile MIBs", details=failed)
-
-    except ImportError:
-        module.fail_json(msg="compile_mibs requested, but 'pysmi' is not installed.")
-    except Exception as e:
-        module.fail_json(msg=f"Error during MIB compilation: {e}")
-
-def compile_all_mibs_in_dir(mib_source, mib_output, module):
-    try:
-        from pysmi.reader.localfile import FileReader
-        from pysmi.writer.pyfile import PyFileWriter
-        from pysmi.parser.smi import parserFactory
-        from pysmi.codegen.pysnmp import PySnmpCodeGen
-        from pysmi.compiler import MibCompiler
-        from pysmi.searcher.stub import StubSearcher
-        from pysmi import debug
-
-        debug.Debug('all')
-
-        mib_files = [
-            f for f in os.listdir(mib_source)
-            if os.path.isfile(os.path.join(mib_source, f)) and f.endswith(('.txt', '.mib'))
-        ]
-        mib_names = [os.path.splitext(f)[0] for f in mib_files]
-
-        parser = parserFactory()()
-        compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
-        compiler.addSources(FileReader(mib_source))
-        compiler.addSearchers(StubSearcher(*mib_names))
-
-        results = compiler.compile(*mib_names, noDeps=False)
-        failed = {k: v for k, v in results.items() if v != 'compiled'}
-        if failed:
-            module.fail_json(msg="Failed to compile one or more MIBs", details=failed)
-
-    except ImportError:
-        module.fail_json(msg="compile_all_mibs requested, but 'pysmi' is not installed.")
-    except Exception as e:
-        module.fail_json(msg=f"Error during MIB compilation: {e}")
+# main() remains the same but with added resolve_names param
 
 def main():
     module_args = dict(
@@ -259,6 +218,7 @@ def main():
         mib_path=dict(type='str', required=False),
         compile_mibs=dict(type='bool', default=False),
         compile_all_mibs=dict(type='bool', default=False),
+        resolve_names=dict(type='bool', default=False),
     )
 
     module = AnsibleModule(argument_spec=module_args, supports_check_mode=False)
@@ -288,12 +248,14 @@ def main():
             module.params['v3_priv_proto']
         )
 
+        resolve_names = module.params['resolve_names']
+
         if module.params['operation'] == 'get':
             ok, result = snmp_get(auth_data, module.params['host'], module.params['port'],
-                                  module.params['oid'], mib_path)
+                                  module.params['oid'], mib_path, resolve_names)
         else:
             ok, result = snmp_walk(auth_data, module.params['host'], module.params['port'],
-                                   module.params['oid'], mib_path)
+                                   module.params['oid'], mib_path, resolve_names)
 
         if ok:
             module.exit_json(changed=False, result=result)
