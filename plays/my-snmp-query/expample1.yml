@@ -1,0 +1,18 @@
+- name: Test SNMP v3 get
+  hosts: localhost
+  tasks:
+    - name: Get sysDescr
+      snmp_query:
+        host: 192.168.1.1
+        version: 3
+        v3_user: snmpuser
+        v3_auth_key: myauthpass
+        v3_priv_key: myprivpass
+        v3_auth_proto: SHA
+        v3_priv_proto: AES
+        oid: 1.3.6.1.2.1.1.1.0
+        operation: get
+      register: snmp_result
+
+    - debug:
+        var: snmp_result.result
