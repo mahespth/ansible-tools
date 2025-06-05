@@ -9,7 +9,7 @@ DOCUMENTATION = r'''
 ---
 module: pysnmp
 
-short_description: Query SNMP-enabled devices using pysnmp (supports GET and WALK).
+short_description: Query SNMP-enabled devices using pysnmp (supports GET, SET and WALK).
 
 version_added: "1.0"
 
