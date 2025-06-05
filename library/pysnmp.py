@@ -315,6 +315,7 @@ def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False, tim
             except Exception:
                 result[str(name)] = val.prettyPrint()
         return True, result      
+      
 def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retries=3, use_ipv6=False):
     if isinstance(oid, str):
         oid = [oid]
@@ -337,7 +338,7 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retrie
         if not success:
             return False, f"Failed to fetch current value of {o}: {current_result}"
 
-        current_val = list(current_result.values())[0]
+        current_val = list(current_result.values())[0].rstrip()
         new_val = coerce_snmp_value(v).prettyPrint()
 
         if current_val == new_val:
@@ -363,7 +364,7 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retrie
             changed = True
             result[str(obj_identity)] = varBinds[0][1].prettyPrint()
 
-    return True, {'changed': changed, 'result': result}
+    return True, changed, result}
 
 
 def old_snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retries=3, use_ipv6=False):
@@ -528,9 +529,10 @@ def main():
         )
 
         resolve_names = module.params['resolve_names']
-
+        changed = False
+      
         if module.params['operation'] == 'set':
-            ok, result = snmp_set(auth_data, module.params['host'], module.params['port'],
+            ok, changed, result = snmp_set(auth_data, module.params['host'], module.params['port'],
                                 module.params['oid'], module.params['value'], mib_path,
                                 module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
           
@@ -545,7 +547,7 @@ def main():
                                  module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
 
         if ok:
-            module.exit_json(changed=False, result=result)
+            module.exit_json(changed=changed, result=result)
         else:
             module.fail_json(msg=result)
 
