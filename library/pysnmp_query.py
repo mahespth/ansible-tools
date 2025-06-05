@@ -7,7 +7,7 @@
 
 DOCUMENTATION = r'''
 ---
-module: snmp_query
+module: pysnmp_query
 
 short_description: Query SNMP-enabled devices using pysnmp (supports GET and WALK).
 
@@ -117,6 +117,42 @@ EXAMPLES = r'''
     community: public
     oid: SNMPv2-MIB::sysDescr.0
     mib_path: /home/user/.snmp/mibs
+    operation: get
+
+- name: SNMPv2c WALK a subtree
+  snmp_query:
+    host: 192.168.1.1
+    community: public
+    oid: SNMPv2-MIB::interfaces
+    operation: walk
+
+- name: SNMP SET with a single OID
+  snmp_query:
+    host: 192.168.1.1
+    community: private
+    version: 2c
+    operation: set
+    oid: SNMPv2-MIB::sysContact.0
+    value: "admin@example.com"
+
+- name: SNMP SET with multiple OIDs
+  snmp_query:
+    host: 192.168.1.1
+    community: private
+    version: 2c
+    operation: set
+    oid:
+      - SNMPv2-MIB::sysContact.0
+      - SNMPv2-MIB::sysName.0
+    value:
+      - "admin@example.com"
+      - "switch-1"
+
+- name: SNMP GET using numeric OID
+  snmp_query:
+    host: 192.168.1.1
+    community: public
+    oid: 1.3.6.1.2.1.1.1.0
     operation: get
 '''
 
