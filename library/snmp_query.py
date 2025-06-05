@@ -131,7 +131,7 @@ def try_compile_mibs(mib_names, mib_source, mib_output, module):
         parser = parserFactory()()
         compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
         compiler.addSources(FileReader(mib_source))
-        compiler.addSearchers(StubSearcher(*mib_names))
+        # compiler.addSearchers(StubSearcher(*mib_names))
 
         results = compiler.compile(*mib_names, noDeps=False)
         failed = {k: v for k, v in results.items() if v not in ['compiled','untouched'] }
@@ -164,7 +164,7 @@ def compile_all_mibs_in_dir(mib_source, mib_output, module):
         parser = parserFactory()()
         compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
         compiler.addSources(FileReader(mib_source))
-        compiler.addSearchers(StubSearcher(*mib_names))
+        # compiler.addSearchers(StubSearcher(*mib_names))
 
         results = compiler.compile(*mib_names, noDeps=False)
         failed = {k: v for k, v in results.items() if v not in ['compiled','untouched'] }
