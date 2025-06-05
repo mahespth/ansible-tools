@@ -317,6 +317,9 @@ def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False, tim
         return True, result      
       
 def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retries=3, use_ipv6=False):
+    changed = False
+    result = {}
+
     if isinstance(oid, str):
         oid = [oid]
     if isinstance(value, str):
@@ -325,9 +328,12 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retrie
     if len(oid) != len(value):
         return False, "OID and value list lengths do not match"
 
-    changed = False
-    result = {}
-
+    mib_view = None
+    if resolve_names:
+        mib_builder = builder.MibBuilder()
+        mib_builder.addMibSources(builder.DirMibSource(mib_path))
+        mib_view = view.MibViewController(mib_builder)
+      
     for o, v in zip(oid, value):
         obj_identity = parse_oid(o)
         if mib_path:
@@ -364,43 +370,7 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retrie
             changed = True
             result[str(obj_identity)] = varBinds[0][1].prettyPrint()
 
-    return True, changed, result}
-
-
-def old_snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retries=3, use_ipv6=False):
-    result = {}
-  
-    if isinstance(oid, str):
-        oid = [oid]
-    if isinstance(value, str):
-        value = [value]
-
-    if len(oid) != len(value):
-        return False, "OID and value list lengths do not match"
-
-    object_types = []
-    for o, v in zip(oid, value):
-        obj_identity = parse_oid(o)
-        if mib_path:
-            obj_identity = obj_identity.addMibSource(mib_path)
-        object_types.append(ObjectType(obj_identity, coerce_snmp_value(v)))
-
-    iterator = setCmd(
-        SnmpEngine(),
-        auth_data,
-        get_transport_target(host, port, timeout, retries, use_ipv6),
-        ContextData(),
-        *object_types
-    )
-
-    errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
-
-    if errorIndication:
-        return False, str(errorIndication)
-    elif errorStatus:
-        return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
-    else:
-         for name, val in varBinds:
+            for name, val in varBinds:
             try:
                 if resolve_names and mib_view:
                     sym = name.getMibSymbol()
@@ -410,7 +380,8 @@ def old_snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, re
                 result[key] = val.prettyPrint()
             except Exception:
                 result[str(name)] = val.prettyPrint()
-          return True, result    
+              
+        return True, changed, result
 
 
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
