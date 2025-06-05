@@ -414,9 +414,11 @@ def main():
                 mib_names = [oid.split("::")[0] for oid in oids if '::' in oid]
               
                 try_compile_mibs(mib_names, mib_path, mib_path, module)
-      
-      if module.params['version'] == '3' and not all(module.params['v3_user'], modue.params['3_auth_key']):
-          module.fail_json(msg="SNMPv3 requires v3_user and v3_auth_key")
+        
+        v3_user = module.params['v3_user']
+        v3_auth_key = module.params['v3_auth_key']
+        if module.params['version'] == '3' and not all([v3_user, v3_auth_key]):
+            module.fail_json(msg="SNMPv3 requires v3_user and v3_auth_key")
        
         auth_data = get_auth_data(
             module.params['version'],
