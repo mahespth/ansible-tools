@@ -315,8 +315,58 @@ def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False, tim
             except Exception:
                 result[str(name)] = val.prettyPrint()
         return True, result      
-
 def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retries=3, use_ipv6=False):
+    if isinstance(oid, str):
+        oid = [oid]
+    if isinstance(value, str):
+        value = [value]
+
+    if len(oid) != len(value):
+        return False, "OID and value list lengths do not match"
+
+    changed = False
+    result = {}
+
+    for o, v in zip(oid, value):
+        obj_identity = parse_oid(o)
+        if mib_path:
+            obj_identity = obj_identity.addMibSource(mib_path)
+
+        # Get current value
+        success, current_result = snmp_get(auth_data, host, port, o, mib_path, False, timeout, retries, use_ipv6)
+        if not success:
+            return False, f"Failed to fetch current value of {o}: {current_result}"
+
+        current_val = list(current_result.values())[0]
+        new_val = coerce_snmp_value(v).prettyPrint()
+
+        if current_val == new_val:
+            result[o] = current_val
+            continue
+
+        # Perform the SET only if needed
+        iterator = setCmd(
+            SnmpEngine(),
+            auth_data,
+            get_transport_target(host, port, timeout, retries, use_ipv6),
+            ContextData(),
+            ObjectType(obj_identity, coerce_snmp_value(v))
+        )
+
+        errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
+
+        if errorIndication:
+            return False, str(errorIndication)
+        elif errorStatus:
+            return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
+        else:
+            changed = True
+            result[str(obj_identity)] = varBinds[0][1].prettyPrint()
+
+    return True, {'changed': changed, 'result': result}
+
+
+def old_snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retries=3, use_ipv6=False):
     result = {}
   
     if isinstance(oid, str):
