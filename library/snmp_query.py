@@ -83,6 +83,24 @@ options:
     default: false
     required: false  
     
+  timeout:
+    description: Network timeint in seconds
+    type: int
+    default: 2
+    required: false  
+
+  retries:
+    description: Network retries
+    type: int
+    default: 3
+    required: false  
+
+  use_ipv6:
+    description: Network retries
+    type: bool
+    default: false
+    required: false 
+    
   mib_path:
     description: Optional directory path to load custom MIBs.
     type: str
@@ -115,6 +133,10 @@ from pysnmp.hlapi import *
 from pysnmp.smi import builder, view
 from pysnmp.proto.rfc1902 import OctetString, Integer, ObjectName
 import os
+
+def get_transport_target(host, port, timeout, retries, use_ipv6=False):
+    transport_cls = Udp6TransportTarget if use_ipv6 else UdpTransportTarget
+    return transport_cls((host, port), timeout=timeout, retries=retries)
 
 def try_compile_mibs(mib_names, mib_source, mib_output, module):
     try:
@@ -197,7 +219,7 @@ def snmp_walk(auth_data, host, port, oids, mib_path=None, resolve_names=False):
         for (errorIndication, errorStatus, errorIndex, varBinds) in nextCmd(
             SnmpEngine(),
             auth_data,
-            UdpTransportTarget((host, port)),
+            get_transport_target(host, port, timeout, retries, use_ipv6),
             ContextData(),
             ObjectType(obj_identity),
             lexicographicMode=False
@@ -234,7 +256,7 @@ def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False):
     iterator = getCmd(
         SnmpEngine(),
         auth_data,
-        UdpTransportTarget((host, port)),
+        get_transport_target(host, port, timeout, retries, use_ipv6),
         ContextData(),
         ObjectType(obj_identity)
     )
@@ -277,7 +299,7 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None):
     iterator = setCmd(
         SnmpEngine(),
         auth_data,
-        UdpTransportTarget((host, port)),
+        get_transport_target(host, port, timeout, retries, use_ipv6),
         ContextData(),
         *object_types
     )
@@ -361,6 +383,10 @@ def main():
         compile_mibs=dict(type='bool', default=False),
         compile_all_mibs=dict(type='bool', default=False),
         resolve_names=dict(type='bool', default=False),
+
+        timeout=dict(type='int', default=2),
+        retries=dict(type='int', default=3),
+        use_ipv6=dict(type='bool', default=False),
     )
 
     module = AnsibleModule(argument_spec=module_args, supports_check_mode=False)
