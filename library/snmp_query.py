@@ -287,6 +287,39 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None):
     else:
         result = {str(name): val.prettyPrint() for name, val in varBinds}
         return True, result
+def snmp_set(auth_data, host, port, oid, value, mib_path=None):
+    if isinstance(oid, str):
+        oid = [oid]
+    if isinstance(value, str):
+        value = [value]
+
+    if len(oid) != len(value):
+        return False, "OID and value list lengths do not match"
+
+    object_types = []
+    for o, v in zip(oid, value):
+        obj_identity = parse_oid(o)
+        if mib_path:
+            obj_identity = obj_identity.addMibSource(mib_path)
+        object_types.append(ObjectType(obj_identity, coerce_snmp_value(v)))
+
+    iterator = setCmd(
+        SnmpEngine(),
+        auth_data,
+        UdpTransportTarget((host, port)),
+        ContextData(),
+        *object_types
+    )
+
+    errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
+
+    if errorIndication:
+        return False, str(errorIndication)
+    elif errorStatus:
+        return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
+    else:
+        result = {str(name): val.prettyPrint() for name, val in varBinds}
+        return True, result
 
 def main():
     module_args = dict(
@@ -294,7 +327,7 @@ def main():
         host=dict(type='str', required=True),
         port=dict(type='int', default=161),
         oid=dict(type='raw', required=True),
-        operation=dict(type='str', choices=['get', 'walk'], default='get'),
+        operation=dict(type='str', choices=['get', 'set', 'walk'], default='get'),
         version=dict(type='str', choices=['1', '2c', '3'], default='2c'),
 
         community=dict(type='str', required=False, default='public', no_log=True),
