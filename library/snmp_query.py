@@ -96,7 +96,7 @@ options:
     required: false  
 
   use_ipv6:
-    description: Network retries
+    description: Use IPv6 transport (UDP over IPv6)
     type: bool
     default: false
     required: false 
@@ -200,7 +200,7 @@ def compile_all_mibs_in_dir(mib_source, mib_output, module):
     except Exception as e:
         module.fail_json(msg=f"Error during MIB compilation: {e}")
 
-def snmp_walk(auth_data, host, port, oids, mib_path=None, resolve_names=False):
+def snmp_walk(auth_data, host, port, oids, mib_path=None, resolve_names=False, timeout=2, retries=3, use_ipv6=False):
     result = {}
     if isinstance(oids, str):
         oids = [oids]
@@ -241,7 +241,7 @@ def snmp_walk(auth_data, host, port, oids, mib_path=None, resolve_names=False):
                         result[str(name)] = val.prettyPrint()
     return True, result
 
-def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False):
+def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False, timeout=2, retries=3, use_ipv6=False):
     result = {}
     obj_identity = parse_oid(oid)
     if mib_path:
@@ -280,7 +280,7 @@ def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False):
                 result[str(name)] = val.prettyPrint()
         return True, result      
 
-def snmp_set(auth_data, host, port, oid, value, mib_path=None):
+def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retries=3, use_ipv6=False):
     if isinstance(oid, str):
         oid = [oid]
     if isinstance(value, str):
