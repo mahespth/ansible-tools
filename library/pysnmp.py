@@ -185,7 +185,7 @@ def try_compile_mibs(mib_names, mib_source, mib_output, module):
         from pysmi import debug
 
         if os.environ.get("PYSMI_DEBUG"):
-          debug.Debug('all')
+            debug.Debug('all')
 
         parser = parserFactory()()
         compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
@@ -213,7 +213,7 @@ def compile_all_mibs_in_dir(mib_source, mib_output, module):
         from pysmi import debug
 
         if os.environ.get("PYSMI_DEBUG"):
-          debug.Debug('all')
+            debug.Debug('all')
 
         mib_files = [
             f for f in os.listdir(mib_source)
@@ -352,7 +352,7 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retrie
 
 
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
-                  v3_auth_proto='MD5', v3_priv_proto='DES'):
+                v3_auth_proto='MD5', v3_priv_proto='DES'):
     if version in ['1', '2c']:
         return CommunityData(community, mpModel=0 if version == '1' else 1)
     elif version == '3':
@@ -434,7 +434,7 @@ def main():
             mib_path = os.path.abspath(mib_path)
           
         if mib_path and not os.path.isdir(mib_path):
-          module.fail_json(msg=f"MIB path {mib_path} does not exist or is not a directory")
+            module.fail_json(msg=f"MIB path {mib_path} does not exist or is not a directory")
 
         if module.params['compile_mibs'] or module.params['compile_all_mibs']:
             if not mib_path:
@@ -470,18 +470,18 @@ def main():
 
         if module.params['operation'] == 'set':
             ok, result = snmp_set(auth_data, module.params['host'], module.params['port'],
-                                  module.params['oid'], module.params['value'], mib_path,
-                                  module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
+                                module.params['oid'], module.params['value'], mib_path,
+                                module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
           
         elif module.params['operation'] == 'get':
             ok, result = snmp_get(auth_data, module.params['host'], module.params['port'],
-                                  module.params['oid'], mib_path, resolve_names,
-                                  module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
+                                module.params['oid'], mib_path, resolve_names,
+                                module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
           
         else:
             ok, result = snmp_walk(auth_data, module.params['host'], module.params['port'],
-                                   module.params['oid'], mib_path, resolve_names,
-                                   module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
+                                 module.params['oid'], mib_path, resolve_names,
+                                 module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
 
         if ok:
             module.exit_json(changed=False, result=result)
