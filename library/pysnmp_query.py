@@ -112,7 +112,7 @@ author:
 
 EXAMPLES = r'''
 - name: SNMPv2c GET with MIB path
-  snmp_query:
+  pysnmp_query:
     host: 192.168.1.1
     community: public
     oid: SNMPv2-MIB::sysDescr.0
@@ -120,14 +120,14 @@ EXAMPLES = r'''
     operation: get
 
 - name: SNMPv2c WALK a subtree
-  snmp_query:
+  pysnmp_query:
     host: 192.168.1.1
     community: public
     oid: SNMPv2-MIB::interfaces
     operation: walk
 
 - name: SNMP SET with a single OID
-  snmp_query:
+  pysnmp_query:
     host: 192.168.1.1
     community: private
     version: 2c
@@ -136,7 +136,7 @@ EXAMPLES = r'''
     value: "admin@example.com"
 
 - name: SNMP SET with multiple OIDs
-  snmp_query:
+  pysnmp_query:
     host: 192.168.1.1
     community: private
     version: 2c
@@ -149,7 +149,7 @@ EXAMPLES = r'''
       - "switch-1"
 
 - name: SNMP GET using numeric OID
-  snmp_query:
+  pysnmp_query:
     host: 192.168.1.1
     community: public
     oid: 1.3.6.1.2.1.1.1.0
