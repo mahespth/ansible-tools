@@ -316,7 +316,7 @@ def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False, tim
                 result[str(name)] = val.prettyPrint()
         return True, result      
       
-def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retries=3, use_ipv6=False):
+def snmp_set(auth_data, host, port, oid, value, mib_path=None, resolve_names=False timeout=2, retries=3, use_ipv6=False):
     changed = False
     result = {}
 
@@ -368,20 +368,19 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retrie
             return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
         else:
             changed = True
-            result[str(obj_identity)] = varBinds[0][1].prettyPrint()
 
             for name, val in varBinds:
-            try:
-                if resolve_names and mib_view:
-                    sym = name.getMibSymbol()
-                    key = f"{sym[0]}::{sym[1]}.{'.'.join(map(str, sym[2]))}"
-                else:
-                    key = str(name)
-                result[key] = val.prettyPrint()
-            except Exception:
-                result[str(name)] = val.prettyPrint()
+                try:
+                    if resolve_names and mib_view:
+                        sym = name.getMibSymbol()
+                        key = f"{sym[0]}::{sym[1]}.{'.'.join(map(str, sym[2]))}"
+                    else:
+                        key = str(name)
+                    result[key] = val.prettyPrint()
+                except Exception:
+                    result[str(name)] = val.prettyPrint()
               
-        return True, changed, result
+            return True, changed, result
 
 
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
