@@ -471,17 +471,17 @@ def main():
         if module.params['operation'] == 'set':
             ok, result = snmp_set(auth_data, module.params['host'], module.params['port'],
                                   module.params['oid'], module.params['value'], mib_path,
-                                  timeout, retries, use_ipv6)
+                                  module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
           
         elif module.params['operation'] == 'get':
             ok, result = snmp_get(auth_data, module.params['host'], module.params['port'],
                                   module.params['oid'], mib_path, resolve_names,
-                                  timeout, retries, use_ipv6)
+                                  module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
           
         else:
             ok, result = snmp_walk(auth_data, module.params['host'], module.params['port'],
                                    module.params['oid'], mib_path, resolve_names,
-                                   timeout, retries, use_ipv6)
+                                   module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
 
         if ok:
             module.exit_json(changed=False, result=result)
