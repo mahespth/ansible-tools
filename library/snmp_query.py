@@ -126,7 +126,8 @@ def try_compile_mibs(mib_names, mib_source, mib_output, module):
         from pysmi.searcher.stub import StubSearcher
         from pysmi import debug
 
-        debug.Debug('all')
+        if os.environ.get("PYSMI_DEBUG"):
+          debug.Debug('all')
 
         parser = parserFactory()()
         compiler = MibCompiler(parser, PySnmpCodeGen(), PyFileWriter(mib_output))
@@ -153,7 +154,8 @@ def compile_all_mibs_in_dir(mib_source, mib_output, module):
         from pysmi.searcher.stub import StubSearcher
         from pysmi import debug
 
-        debug.Debug('all')
+        if os.environ.get("PYSMI_DEBUG"):
+          debug.Debug('all')
 
         mib_files = [
             f for f in os.listdir(mib_source)
@@ -339,30 +341,6 @@ def coerce_snmp_value(value):
     except ValueError:
         return OctetString(value)
 
-def snmp_set(auth_data, host, port, oid, value, mib_path=None):
-    obj_identity = parse_oid(oid)
-    if mib_path:
-        obj_identity = obj_identity.addMibSource(mib_path)
-
-    iterator = setCmd(
-        SnmpEngine(),
-        auth_data,
-        UdpTransportTarget((host, port)),
-        ContextData(),
-        ObjectType(obj_identity, coerce_snmp_value(value))
-    )
-
-    errorIndication, errorStatus, errorIndex, varBinds = next(iterator)
-
-    if errorIndication:
-        return False, str(errorIndication)
-    elif errorStatus:
-        return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
-    else:
-        result = {str(name): val.prettyPrint() for name, val in varBinds}
-        return True, result
-
-
 def main():
     module_args = dict(
         value=dict(type='str', required=False),
@@ -389,8 +367,12 @@ def main():
 
     try:
         mib_path = module.params['mib_path']
+      
         if mib_path:
             mib_path = os.path.abspath(mib_path)
+          
+        if mib_path and not os.path.isdir(mib_path):
+          module.fail_json(msg=f"MIB path {mib_path} does not exist or is not a directory")
 
         if module.params['compile_mibs'] or module.params['compile_all_mibs']:
             if not mib_path:
@@ -406,7 +388,10 @@ def main():
                 mib_names = [oid.split("::")[0] for oid in oids if '::' in oid]
               
                 try_compile_mibs(mib_names, mib_path, mib_path, module)
-               
+      
+      if version == '3' and not all([v3_user, v3_auth_key]):
+          module.fail_json(msg="SNMPv3 requires v3_user and v3_auth_key")
+       
         auth_data = get_auth_data(
             module.params['version'],
             module.params['community'],
