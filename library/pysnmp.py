@@ -317,6 +317,8 @@ def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False, tim
         return True, result      
 
 def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retries=3, use_ipv6=False):
+    result = {}
+  
     if isinstance(oid, str):
         oid = [oid]
     if isinstance(value, str):
@@ -347,8 +349,17 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, timeout=2, retrie
     elif errorStatus:
         return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
     else:
-        result = {str(name): val.prettyPrint() for name, val in varBinds}
-        return True, result
+         for name, val in varBinds:
+            try:
+                if resolve_names and mib_view:
+                    sym = name.getMibSymbol()
+                    key = f"{sym[0]}::{sym[1]}.{'.'.join(map(str, sym[2]))}"
+                else:
+                    key = str(name)
+                result[key] = val.prettyPrint()
+            except Exception:
+                result[str(name)] = val.prettyPrint()
+          return True, result    
 
 
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
