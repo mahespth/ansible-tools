@@ -14,10 +14,11 @@ short_description: Query SNMP-enabled devices using pysnmp (supports GET, SET an
 version_added: "1.0"
 
 description:
-  - This module allows SNMP queries (GET or WALK) using the pure Python pysnmp library.
+  - This module allows SNMP GET, SET and WALK using the Python pysnmp library.
   - Supports SNMP v1, v2c, and v3 with authentication and privacy protocols.
   - Can resolve symbolic MIB names from a user-specified directory.
-
+  - Able to compile PYSMI MIB from legacy MIB files if desired
+  
 options:
   host:
     description: The IP address or hostname of the SNMP-enabled device.
