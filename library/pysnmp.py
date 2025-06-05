@@ -316,7 +316,7 @@ def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False, tim
                 result[str(name)] = val.prettyPrint()
         return True, result      
       
-def snmp_set(auth_data, host, port, oid, value, mib_path=None, resolve_names=False timeout=2, retries=3, use_ipv6=False):
+def snmp_set(auth_data, host, port, oid, value, mib_path=None, resolve_names=False, timeout=2, retries=3, use_ipv6=False):
     changed = False
     result = {}
 
