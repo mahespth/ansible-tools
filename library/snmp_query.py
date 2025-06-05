@@ -400,9 +400,13 @@ def main():
                 compile_all_mibs_in_dir(mib_path, mib_path, module)
               
             else:
-                mib_name = module.params['oid'].split("::")[0]
-                try_compile_mibs([mib_name], mib_path, mib_path, module)
-
+                oids = module.params['oid']
+                if isinstance(oids, str):
+                    oids = [oids]
+                mib_names = [oid.split("::")[0] for oid in oids if '::' in oid]
+              
+                try_compile_mibs(mib_names, mib_path, mib_path, module)
+               
         auth_data = get_auth_data(
             module.params['version'],
             module.params['community'],
