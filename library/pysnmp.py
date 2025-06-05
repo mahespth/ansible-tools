@@ -381,8 +381,7 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, resolve_names=Fal
                 except Exception:
                     result[str(name)] = val.prettyPrint()
               
-            return True, changed, result
-
+    return True, changed, result
 
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
                 v3_auth_proto='MD5', v3_priv_proto='DES'):
