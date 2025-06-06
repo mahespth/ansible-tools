@@ -166,7 +166,16 @@ result:
 
 
 from ansible.module_utils.basic import AnsibleModule
-from pysnmp.hlapi import *
+
+from pysnmp.hlapi.auth import (
+    usmHMACMD5AuthProtocol, usmHMACSHAAuthProtocol,
+    usmHMAC128SHA224AuthProtocol, usmHMAC192SHA256AuthProtocol,
+    usmHMAC256SHA384AuthProtocol, usmHMAC384SHA512AuthProtocol,
+)
+from pysnmp.hlapi.security import (
+    usmDESPrivProtocol, usm3DESEDEPrivProtocol,
+    usmAesCfb128Protocol, usmAesCfb192Protocol, usmAesCfb256Protocol
+)
 from pysnmp.smi import builder, view
 from pysnmp.proto.rfc1902 import OctetString, Integer, ObjectName
 import os
