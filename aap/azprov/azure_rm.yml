@@ -21,3 +21,5 @@ keyed_groups:
 #   - prefix: role
 #     key: tags.Role
 
+# conditional_groups:
+#  linux_prod_db:  "'Linux' in os_type and tags.Environment == 'prod' and tags.Role == 'db'"
