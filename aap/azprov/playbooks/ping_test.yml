@@ -1,0 +1,8 @@
+---
+
+- hosts: tag_Environment_prod:&tag_Role_db   # intersection (prod **and** db)
+  tasks:
+    - name: smoke-test
+      ansible.builtin.ping
+
+...
