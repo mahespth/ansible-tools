@@ -1,0 +1,16 @@
+# inventories/myazure_rm.yaml   (← file name is important)
+plugin: azure.azcollection.azure_rm          # dynamic inventory plugin
+auth_source: auto                            # use AZ CLI / env vars / credential file
+include_tags_as_host_vars: true              # expose every VM tag under hostvars.tags
+plain_host_names: yes                        # keep the VM’s real name (drop the hash suffix)
+
+# search scope – change to taste
+include_vm_resource_groups:
+  - "*"                                      # or list resource-groups you care about
+
+# 1️⃣  One group for **every** tag/key/value pair →  tag_<key>_<value>
+keyed_groups:
+  - prefix: tag                              # group name starts with “tag_”
+    key: tags                                # “tags” dict is provided by the plugin
+    separator: _                             # default, shown for clarity
+    # result:  Environment=dev  ⇒  tag_Environment_dev
