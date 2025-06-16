@@ -336,25 +336,26 @@ def snmp_get(auth_data, host, port, oid, mib_path=None, resolve_names=False, tim
             except Exception:
                 result[str(name)] = val.prettyPrint()
         return True, result      
-      
+
 def snmp_set(auth_data, host, port, oid, value, mib_path=None, resolve_names=False, timeout=2, retries=3, use_ipv6=False):
     changed = False
     result = {}
 
     if isinstance(oid, str):
         oid = [oid]
+
     if isinstance(value, str):
         value = [value]
 
     if len(oid) != len(value):
-        return False, "OID and value list lengths do not match"
+        return False, False, "OID and value list lengths do not match"
 
     mib_view = None
     if resolve_names:
         mib_builder = builder.MibBuilder()
         mib_builder.addMibSources(builder.DirMibSource(mib_path))
         mib_view = view.MibViewController(mib_builder)
-      
+
     for o, v in zip(oid, value):
         obj_identity = parse_oid(o)
         if mib_path:
@@ -363,7 +364,7 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, resolve_names=Fal
         # Get current value
         success, current_result = snmp_get(auth_data, host, port, o, mib_path, False, timeout, retries, use_ipv6)
         if not success:
-            return False, f"Failed to fetch current value of {o}: {current_result}"
+            return False, False, f"Failed to fetch current value of {o}: {current_result}"
 
         current_val = list(current_result.values())[0].rstrip()
         new_val = coerce_snmp_value(v).prettyPrint()
@@ -386,7 +387,7 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, resolve_names=Fal
         if errorIndication:
             return False, str(errorIndication)
         elif errorStatus:
-            return False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
+            return False, False, f"{errorStatus.prettyPrint()} at {varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
         else:
             changed = True
 
@@ -400,7 +401,7 @@ def snmp_set(auth_data, host, port, oid, value, mib_path=None, resolve_names=Fal
                     result[key] = val.prettyPrint()
                 except Exception:
                     result[str(name)] = val.prettyPrint()
-              
+
     return True, changed, result
 
 def get_auth_data(version, community, v3_user=None, v3_auth_key=None, v3_priv_key=None,
@@ -453,7 +454,7 @@ def coerce_snmp_value(value):
 
 def main():
     module_args = dict(
-        value=dict(type='str', required=False),
+        value=dict(type='raw', required=False),
         host=dict(type='str', required=True),
         port=dict(type='int', default=161),
         oid=dict(type='raw', required=True),
@@ -481,10 +482,10 @@ def main():
 
     try:
         mib_path = module.params['mib_path']
-      
+
         if mib_path:
             mib_path = os.path.abspath(mib_path)
-          
+
         if mib_path and not os.path.isdir(mib_path):
             module.fail_json(msg=f"MIB path {mib_path} does not exist or is not a directory")
 
@@ -494,20 +495,20 @@ def main():
 
             if module.params['compile_all_mibs']:
                 compile_all_mibs_in_dir(mib_path, mib_path, module)
-              
+
             else:
                 oids = module.params['oid']
                 if isinstance(oids, str):
                     oids = [oids]
                 mib_names = [oid.split("::")[0] for oid in oids if '::' in oid]
-              
+
                 try_compile_mibs(mib_names, mib_path, mib_path, module)
         
         v3_user = module.params['v3_user']
         v3_auth_key = module.params['v3_auth_key']
         if module.params['version'] == '3' and not all([v3_user, v3_auth_key]):
             module.fail_json(msg="SNMPv3 requires v3_user and v3_auth_key")
-       
+
         auth_data = get_auth_data(
             module.params['version'],
             module.params['community'],
@@ -520,21 +521,21 @@ def main():
 
         resolve_names = module.params['resolve_names']
         changed = False
-      
+
         if module.params['operation'] == 'set':
             ok, changed, result = snmp_set(auth_data, module.params['host'], module.params['port'],
                                 module.params['oid'], module.params['value'], mib_path,
                                 module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
-          
+
         elif module.params['operation'] == 'get':
             ok, result = snmp_get(auth_data, module.params['host'], module.params['port'],
                                 module.params['oid'], mib_path, resolve_names,
                                 module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
-          
+
         else:
             ok, result = snmp_walk(auth_data, module.params['host'], module.params['port'],
-                                 module.params['oid'], mib_path, resolve_names,
-                                 module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
+                                module.params['oid'], mib_path, resolve_names,
+                                module.params['timeout'], module.params['retries'], module.params['use_ipv6'])
 
         if ok:
             module.exit_json(changed=changed, result=result)

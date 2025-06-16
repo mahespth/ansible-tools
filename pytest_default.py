@@ -17,7 +17,7 @@ scenario = os.environ['MOLECULE_SCENARIO']
 
 
 runner = AnsibleRunner(inventory)
-runnet.get_hosts(DEFAULT_HOST)
+runner.get_hosts(DEFAULT_HOST)
 
 @pytest.fixture
 """ old way ""
