@@ -61,4 +61,3 @@ if __name__ == "__main__":
     pw = getpass.getpass(f"Password for {user}: ")
     ok = test_login(user, pw)
     sys.exit(0 if ok else 2)
-
