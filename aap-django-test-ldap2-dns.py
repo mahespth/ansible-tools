@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.11
 """
 exercise_get_group_dns.py  –  reproduce AAP’s group-lookup step
 ----------------------------------------------------------------
@@ -11,10 +11,10 @@ Requires:
   * python3-django-auth-ldap-4.0.0-2 (Red Hat RPM)
   * python3-django
 """
-import os, sys, ldap, django
+import os, sys, ldap
 from django.conf import settings
 from django_auth_ldap.config import LDAPSearch, GroupOfNamesType
-from django_auth_ldap.backend import LDAPBackend
+
 
 ###############################################################################
 #  ▶▶  FILL IN YOUR OWN VALUES  ◀◀
@@ -27,6 +27,7 @@ BASE_DN           = "DC=example,DC=com"
 GROUP_BASE_DN     = BASE_DN                     # keep it simple
 USERNAME_ATTR     = "sAMAccountName"            # or userPrincipalName
 
+#
 ###############################################################################
 #  ───  DJANGO BOOTSTRAP (no settings.py on disk required)  ───
 ###############################################################################
@@ -36,6 +37,12 @@ settings.configure(
         "django.contrib.auth",
         "django.contrib.contenttypes",
     ],
+    DATABASES={
+      "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ":memory:",
+      }
+    },
     # 1️⃣ LDAP connection & search settings
     AUTH_LDAP_SERVER_URI = LDAP_URI,
     AUTH_LDAP_BIND_DN    = BIND_DN,
@@ -57,8 +64,16 @@ settings.configure(
     ),
     AUTH_LDAP_GROUP_TYPE = GroupOfNamesType(),   # AD behaves like groupOfNames
     AUTH_LDAP_FIND_GROUP_PERMS = False,          # we only need the list, not perms
+
 )
+import django
 django.setup()
+
+from django.core.management import call_command
+call_command("migrate", "--run-syncdb", verbosity=0, interactive=False)
+
+
+from django_auth_ldap.backend import LDAPBackend
 
 ###############################################################################
 #  ───  DRIVE THE SAME CALL AAP USES  ───
@@ -93,3 +108,4 @@ if __name__ == "__main__":
     except Exception as e:
         print("\n❌  get_group_dns blew up:")
         raise
+
