@@ -1,0 +1,16 @@
+- name: Send custom message to SolarWinds via SWIS/REST
+  hosts: localhost
+  tasks:
+    - name: Create event
+      uri:
+        url: "https://solarwinds_host:17778/SolarWinds/InformationService/v3/Json/Invoke/Orion.Operations.CreateEvent"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+          Authorization: "Bearer YOUR_SOLARWINDS_TOKEN"
+        body_format: json
+        body:
+          arguments:
+            - "5000"  # Event Type
+            - 0
+            - "Ansible playbook XYZ failed"
