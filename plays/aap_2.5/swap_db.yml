@@ -1,0 +1,140 @@
+---
+
+# Swap database for dev when we dont have a LB or cloud DB.
+# ------------------------------------------------------------
+# We have two databases, one primary that is replicating
+# to a backup database. Should we have a problem with the
+# primary database then we can activate the backup one by
+# promoting it within postgres.
+# Once this is done we will change the DNS or the hostfile
+# to point to the backup postgres server.
+#
+
+- hosts: "{{ groups['automationcontroller']+groups['automationedacontroller']+groups['automationhub'] }}"
+  gather_facts: false
+  ignore_unreachable: true
+
+  pre_tasks:
+    - name: "Get existing setup"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      block:
+        - name: "Get existing ips"
+          set_fact:
+            primary: "{{ lookup('pipe', '/usr/bin/dig '+groups['database'][0]+' +noall +short ') }}"
+            backup: "{{ lookup('pipe', '/usr/bin/dig '+groups['database'][1]+' +noall +short ') }}"
+            current: "{{ lookup('pipe','grep -w '+groups['database'][0]+' /etc/hosts') }}"
+
+        - name: "Show state"
+          vars:
+            msg: |
+              Hosts Current: "{{ current }}"
+
+              DNS Primary: "{{ primary }}"
+              DNS Backup: "{{ backup }}"
+          debug:
+            msg: "{{ msg.splitlines() }}"
+
+        - name: "Checking input"
+          assert:
+            that:
+              - host | default() | length
+              - ip | default() | length
+              - host in groups['database']
+            fail_msg: |
+              you need to supply the vars 'host' and 'ip' from the ones available.
+              {{ groups['database'] }}
+
+
+  tasks:
+    - name: "Stopping automation controllers"
+      become: true
+      command: automation-controller-service stop
+      register: _controller_stop_results
+      when: inventory_hostname in groups['automationcontroller']
+
+    - name: "Stopping EDA controllers"
+      become: true
+      systemd_service:
+        name: automation-eda-controller.service
+        state: stopped
+      register: _edacontroller_stop_results
+      when: inventory_hostname in groups['automationedacontroller']
+
+    - name: "Stopping Automation HUB"
+      become: true
+      systemd_service:
+        name: "{{ item }}"
+        state: stopped
+      register: _hub_stop_results
+      with_items:
+        - pulpcore-api.service
+        - pulpcore.service
+        - pulpcore-api.service
+        - pulpcore-content.service
+        - pulpcore-worker@1.service
+        - pulpcore-worker@2.service
+        - nginx.service
+        - redis.service
+      when: inventory_hostname in groups['automationhub']
+
+    - name: Update host file
+      become: yes
+      lineinfile:
+        path: "/etc/hosts"
+        regexp: ".*[\\s]{{ host }}[ |$]"
+        line: "{{ ip }} {{ host }} {{ host | split('.') | first }}"
+        state: present
+        backup: yes
+
+    - name: "Ask user has the database been moved."
+      pause:
+        prompt: Press enter when ready to continue failover
+
+
+    - name: "Validation with a basic comms test to the database."
+      wait_for:
+        host: "{{ host }}"
+        port: 5432
+        msg: "Database has connectivity."
+
+    - name: "Starting Automation HUB"
+      become: true
+      systemd_service:
+        name: "{{ item }}"
+        state: started
+      register: _hub_stop_results
+      with_items:
+        - pulpcore-api.service
+        - pulpcore.service
+        - pulpcore-api.service
+        - pulpcore-content.service
+        - pulpcore-worker@1.service
+        - pulpcore-worker@2.service
+        - nginx.service
+        - redis.service
+      when: inventory_hostname in groups['automationhub']
+
+    - name: "Starting EDA controllers"
+      become: true
+      systemd_service:
+        name: automation-eda-controller.service
+        state: started
+      register: _edacontroller_stop_results
+      when: inventory_hostname in groups['automationedacontroller']
+
+    - name: "Starting automation controllers"
+      become: true
+      command: automation-controller-service start
+      register: _controller_start_results
+      when: inventory_hostname in groups['automationcontroller']
+
+    - name: "Database has been swapped."
+      vars:
+        msg: |
+          Database has been swapped and services have been restarted.
+      debug:
+        msg: "{{ msg }}"
+
+...
