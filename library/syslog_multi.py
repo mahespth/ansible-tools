@@ -1,10 +1,14 @@
+#!/usr/bin/python
+
+# -*- coding: utf-8 -*-
+
 """
 Ansible module to send a single syslog message to one or more remote syslog
 servers over UDP or TCP.
 
 Author: Steve Maher (@mahespth)
-Copyright: (c) 2025, AIXTreme Research Ltd
-License: GPLv3+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+# Stephen Maher, AIXtreme Research Ltd.
+# (c) 2025 AIXTreme Research Ltd Licensed under the MIT License
 
 """
 
