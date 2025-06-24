@@ -1,0 +1,5 @@
+
+# @@SGM Pre-release 3.0.0-a1 is available, but it requires ansible-core 2.17+ 
+
+- name: community.crypto
+  version: ">=2.25.0,<3.0.0"
