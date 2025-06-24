@@ -1,0 +1,44 @@
+---
+# Run from AAP as a job template.  We only need to touch one host
+# per group, so "localhost" (the control node) is enough.
+- name: Generate one CSR per inventory group
+  hosts: localhost
+  gather_facts: no
+  collections:
+    - community.crypto
+
+  vars:
+    # List the groups you care about. Keeps the play nicer if
+    # someone adds extra groups later.
+    target_groups:
+      - automationgateway
+      - automationcontroller
+      - execution_nodes
+      - automation_hub
+      - pgsql
+      - gitlab
+
+  tasks:
+    - name: Build a dictionary of SANs for each target group
+      set_fact:
+        group_san_map: >-
+          {{
+            dict(
+              target_groups|
+              reject('none')|
+              map('extract', groups)|
+              zip(
+                target_groups|
+                map('extract', groups)|
+                map('map', 'extract', hostvars, ['inventory_hostname'])|
+                map('list')
+              )
+            )
+          }}
+
+    - name: Include role once for every group
+      include_role:
+        name: group_csr
+      loop: "{{ target_groups }}"
+      loop_control:
+        loop_var: group_name
