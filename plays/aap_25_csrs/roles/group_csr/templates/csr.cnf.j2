@@ -1,0 +1,37 @@
+# Steve Maher, CSR Template for AAP.
+#
+# csr.cnf.j2
+#
+#
+#
+# Rendered by the group_csr role to build an OpenSSL CSR config.
+# Expected variables (set in the role or playbook):
+#   common_name  – string, the CN you want on the cert
+#   dns_names    – list of DNS SANs (can be empty but usually not)
+#   ip_names     – list of IP SANs (optional, may be omitted)
+
+[ req ]
+default_bits       = 4096        # or set key_size in openssl_privatekey
+prompt             = no
+default_md         = sha256
+req_extensions     = v3_req
+distinguished_name = dn
+
+[ dn ]
+CN = {{ common_name }}
+
+[ v3_req ]
+subjectAltName = @alt_names
+
+[ alt_names ]
+{#–– DNS SANs ––#}
+{% for idx, dns in dns_names | enumerate(start=1) %}
+DNS.{{ idx }} = {{ dns }}
+{% endfor %}
+
+{#–– IP SANs, if any ––#}
+{% if ip_names is defined %}
+{% for idx, ip in ip_names | enumerate(start=dns_names|length + 1) %}
+IP.{{ idx }} = {{ ip }}
+{% endfor %}
+{% endif %}
