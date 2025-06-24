@@ -13,7 +13,22 @@
     state: present
     mode: '0600'
 
+- name: Generate CSR with SANs via csr.cnf.j2
+  when: use_template | default(false) bool
+  community.crypto.openssl_csr:
+    path: "{{ playbook_dir }}/output/{{ group_name }}/{{ group_name }}.csr"
+    privatekey_path: "{{ playbook_dir }}/output/{{ group_name }}/{{ group_name }}.key"
+    csr_config: "{{ lookup('template', 'csr.cnf.j2') }}"
+  vars:
+    common_name: "{{ group_name }}.internal"
+    dns_names:
+      - "{{ group_name }}.internal"
+      - "{{ group_san_map[group_name] | list }}"
+    # ip_names: add this var if you want IP SANs
+
+
 - name: Generate CSR with SANs
+  when: not use_template | default(false) bool
   community.crypto.openssl_csr:
     path: "{{ playbook_dir }}/output/{{ group_name }}/{{ group_name }}.csr"
     privatekey_path: "{{ playbook_dir }}/output/{{ group_name }}/{{ group_name }}.key"
