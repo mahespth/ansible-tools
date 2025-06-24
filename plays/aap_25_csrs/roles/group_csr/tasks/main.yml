@@ -1,0 +1,33 @@
+---
+- name: Create output directory
+  file:
+    path: "{{ playbook_dir }}/output/{{ group_name }}"
+    state: directory
+    mode: '0750'
+
+- name: Generate private key (RSA 4096)
+  community.crypto.openssl_privatekey:
+    path: "{{ playbook_dir }}/output/{{ group_name }}/{{ group_name }}.key"
+    size: 4096
+    type: RSA
+    state: present
+    mode: '0600'
+
+- name: Generate CSR with SANs
+  community.crypto.openssl_csr:
+    path: "{{ playbook_dir }}/output/{{ group_name }}/{{ group_name }}.csr"
+    privatekey_path: "{{ playbook_dir }}/output/{{ group_name }}/{{ group_name }}.key"
+    common_name: "{{ group_name }}.internal"
+    subject_alt_name:
+      - "DNS:{{ group_name }}.internal"
+      - >
+        {{
+          group_san_map[group_name] |
+          map('regex_replace', '^(.*)$', 'DNS:\\1') |
+          list
+        }}
+    # Flatten the two lists above
+    subject_alt_name_critical: false
+    mode: '0644'
+
+...
