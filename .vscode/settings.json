@@ -1,0 +1,10 @@
+{
+    "ansible.python.interpreterPath": "/bin/python3.12",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingImports": "none",
+        "reportUndefinedVariable": "none"
+    },
+    "terminal.integrated.env.linux": {
+        "ANSIBLE_LIBRARY": "${workspaceFolder}/library"
+    }
+}
