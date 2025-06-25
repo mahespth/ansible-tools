@@ -18,62 +18,58 @@ __metaclass__ = type
 DOCUMENTATION = r"""
 module: syslog_multisend
 short_description: Send a syslog message to multiple servers over UDP or TCP
-version_added: "1.1.0"
+version_added: "1.1.1"
 author:
   - Steve (@your-github-handle)
 description:
-  - Sends a single RFC 3164‑style syslog packet (PRI + message, newline‑delimited)
-    to a list of remote collectors.
-  - Supports UDP or TCP transports, and accepts the *facility* either as an
-    integer 0‑23 **or** the standard mnemonic string (e.g. C(user), C(local0)).
+  - "Sends a single RFC 3164‑style syslog packet (PRI + message, newline‑delimited) to one or more remote collectors."
+  - "Supports UDP or TCP transports and accepts the *facility* either as an integer 0‑23 or the standard mnemonic string (e.g. user, local0)."
 options:
   msg:
     description:
-      - The syslog message text/body.
-      - The module automatically prepends the calculated PRI value (based on
-        *facility* and *priority*) as required by RFC 3164.
+      - "The syslog message body to send."
+      - "The module automatically prepends the calculated PRI value (based on *facility* and *priority*) as required by RFC 3164."
     type: str
     required: true
   servers:
     description:
-      - List of hostnames or IP addresses of the syslog collectors.
+      - "List of syslog collector hostnames or IP addresses."
     type: list
     elements: str
     required: true
   port:
     description:
-      - Destination port on the collectors.
+      - "Destination port on the collectors."
     type: int
     default: 514
   protocol:
     description:
-      - Transport protocol to use.
+      - "Transport protocol to use."
     type: str
-    choices: [ udp, tcp ]
+    choices:
+      - udp
+      - tcp
     default: udp
   facility:
     description:
-      - Syslog facility – either the numeric code (0‑23) *or* one of the
-        standard names: C(kern), C(user), C(mail), C(daemon), C(auth),
-        C(syslog), C(lpr), C(news), C(uucp), C(cron), C(authpriv), C(ftp),
-        C(ntp), C(security), C(console), C(solaris-cron), C(local0)…C(local7).
+      - "Syslog facility — numeric code 0‑23 *or* one of the standard names: kern, user, mail, daemon, auth, syslog, lpr, news, uucp, cron, authpriv, ftp, ntp, security, console, solaris‑cron, local0…local7."
     type: raw
     default: user
   priority:
     description:
-      - Syslog severity/priority number (0‑7) used to calculate PRI.
-    type: int
-    default: 6  # informational
+      - "Syslog severity/priority 0‑7 (or name: emerg, alert, crit, err, warning, notice, info, debug)."
+    type: raw
+    default: info
   timeout:
     description:
-      - Connect/send timeout in seconds.
+      - "Socket connect/send timeout in seconds."
     type: int
     default: 3
 requirements: []
 """
 
 EXAMPLES = r"""
-- name: Send an informational event to two collectors over UDP (facility by name)
+- name: Send an informational event with facility by name
   syslog_multisend:
     msg: "App deployed successfully on {{ inventory_hostname }}"
     servers:
@@ -82,7 +78,7 @@ EXAMPLES = r"""
     facility: user
     priority: info
 
-- name: Send a critical alert to a collector on TCP/6514 using numeric facility
+- name: Critical alert over TCP/6514 with numeric facility
   syslog_multisend:
     msg: "CRIT: disk full on {{ inventory_hostname }}"
     servers: [ "logs.example.com" ]
@@ -96,23 +92,18 @@ RETURN = r"""
 sent:
   description: List of collectors that accepted the packet.
   type: list
-  returned: always
 failed:
-  description: Mapping of collectors that failed and the associated error.
+  description: Mapping of collectors that failed and the associated error message.
   type: dict
-  returned: always
 sent_count:
   description: Number of successful sends.
   type: int
-  returned: always
 failed_count:
   description: Number of failed sends.
   type: int
-  returned: always
 changed:
   description: Always C(true) when at least one packet was delivered.
   type: bool
-  returned: always
 """
 
 import socket
