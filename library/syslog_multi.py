@@ -20,7 +20,7 @@ module: syslog_multisend
 short_description: Send a syslog message to multiple servers over UDP or TCP
 version_added: "1.1.1"
 author:
-  - Steve (@your-github-handle)
+  - Steve Maher (@mahespth)
 description:
   - "Sends a single RFC 3164‑style syslog packet (PRI + message, newline‑delimited) to one or more remote collectors."
   - "Supports UDP or TCP transports and accepts the *facility* either as an integer 0‑23 or the standard mnemonic string (e.g. user, local0)."
