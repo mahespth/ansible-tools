@@ -53,11 +53,8 @@
         method: GET
         return_content: yes
       register: import_status
-      until: import_status.json.status == "finished"
+      until: import_status.json.import_status == "finished"
       retries: 20
       delay: 10
 
 
-    - name: Debug curl result
-      debug:
-        var: curl_result.stdout
