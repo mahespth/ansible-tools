@@ -1,0 +1,18 @@
+---
+
+# --- AWX / AAP connection ---
+awx_host: https://awx.example.com
+awx_oauthtoken: "{{ lookup('env','AWX_TOKEN') }}"
+
+# Pick ONE of the next two:
+workflow_id: 42           # if you already know the numeric ID
+workflow_name: My-Pipeline  # …or let the playbook resolve it
+
+# --- Confluence upload (optional) ---
+confluence_base_url: https://confluence.example.com
+confluence_user: "{{ lookup('env','CONFLUENCE_USER') }}"
+confluence_pass: "{{ lookup('env','CONFLUENCE_PASS') }}"
+confluence_page_id: 1234567        # numeric Content-ID of the target page
+attach_to_confluence: true         # set false to skip the upload step
+
+...
