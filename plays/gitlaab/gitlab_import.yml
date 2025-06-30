@@ -1,0 +1,50 @@
+---
+- name: Rename existing GitLab project and import new one
+  hosts: localhost
+  vars:
+    gitlab_url: "https://gitlab-airgap.local"
+    private_token: "YOUR_ACCESS_TOKEN"
+    project_namespace: "mygroup"
+    project_name: "myproject"
+    export_file: "/path/to/project_export.tar.gz"
+
+  tasks:
+
+    - name: Get project info
+      uri:
+        url: "{{ gitlab_url }}/api/v4/projects/{{ project_namespace }}%2F{{ project_name }}"
+        headers:
+          PRIVATE-TOKEN: "{{ private_token }}"
+        method: GET
+        return_content: yes
+      register: project_info
+      failed_when: project_info.status not in [200, 404]
+
+    - name: Rename project to "-old" if it exists
+      when: project_info.status == 200
+      uri:
+        url: "{{ gitlab_url }}/api/v4/projects/{{ project_info.json.id }}"
+        method: PUT
+        headers:
+          PRIVATE-TOKEN: "{{ private_token }}"
+        body_format: json
+        body:
+          path: "{{ project_name }}-old"
+          name: "{{ project_name }}-old"
+      register: rename_result
+      failed_when: rename_result.status != 200
+
+    - name: Import project using curl (workaround for file upload)
+      shell: |
+        curl --silent --show-error --fail -X POST "{{ gitlab_url }}/api/v4/projects/import" \
+          -H "PRIVATE-TOKEN: {{ private_token }}" \
+          -F "path={{ project_name }}" \
+          -F "name={{ project_name }}" \
+          -F "namespace={{ project_namespace }}" \
+          -F "file=@{{ export_file }}"
+      register: curl_result
+      failed_when: curl_result.rc != 0
+
+    - name: Debug curl result
+      debug:
+        var: curl_result.stdout
