@@ -1,0 +1,240 @@
+---
+
+# Steve Maher, Export all workflows to confluence
+# ------------------------------------------------
+
+
+
+- name: Export ALL AWX workflows to a single Confluence page
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../vars/main.yml
+
+  collections:
+    - community.general       # for uri improvements
+
+  vars:
+    awx_page_size: 200
+    confluence_headers:
+      Authorization: "Basic {{ (confluence_user ~ ':' ~ confluence_token) | b64encode }}"
+      Content-Type: application/json
+    page_body_template: |
+      <p>Below is the current list of workflow job templates automatically synchronised from AWX ({{ awx_host }}).</p>
+      {% for wf in workflows %}
+      <h2>{{ wf.name }}</h2>
+      <ac:image>
+        <ri:attachment ri:filename="{{ wf.filename }}" />
+      </ac:image>
+      {% endfor %}
+
+  tasks:
+
+  # --------------------------------------------------
+  # 1. Get ALL Workflow Job Templates
+  # --------------------------------------------------
+  - name: Retrieve first page of WJTs
+    uri:
+      url: "{{ awx_host }}/api/v2/workflow_job_templates/?page_size={{ awx_page_size }}"
+      headers:
+        Authorization: "Bearer {{ awx_oauthtoken }}"
+      return_content: yes
+      validate_certs: no
+    register: wjt_page0
+
+  - name: Collect paginated results
+    set_fact:
+      workflows_raw: "{{ wjt_page0.json.results }}"
+    loop: "{{ range(2, ((wjt_page0.json.count / awx_page_size) | round(0, 'floor')) + 1) | list }}"
+    loop_control:
+      loop_var: page_no
+    uri:
+      url: "{{ awx_host }}/api/v2/workflow_job_templates/?page={{ page_no }}&page_size={{ awx_page_size }}"
+      headers:
+        Authorization: "Bearer {{ awx_oauthtoken }}"
+      return_content: yes
+      validate_certs: no
+    register: next_page
+    vars:
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    when: wjt_page0.json.count > awx_page_size
+    set_fact:
+      workflows_raw: "{{ workflows_raw + next_page.json.results }}"
+
+  - name: Build helper list (id, name, safe filename)
+    set_fact:
+      workflows: |
+        {{ workflows_raw | map('extract', 'id') | zip(workflows_raw | map(attribute='name')) |
+           map('community.general.dict_kv', keys=['id','name']) |
+           map('combine', {'filename': item.name | regex_replace('[^A-Za-z0-9._-]+','_') ~ '.' ~ graph_render_format }) | list }}
+    vars:
+      item: "{{ item }}"
+
+  - debug:
+      msg: "Found {{ workflows | length }} workflow templates."
+
+  # --------------------------------------------------
+  # 2. Prepare working directory
+  # --------------------------------------------------
+  - name: Create tmp directory
+    file:
+      path: "{{ tmp_dir }}"
+      state: directory
+      mode: 0700
+
+  # --------------------------------------------------
+  # 3. For each workflow → pull nodes → render PNG/SVG
+  # --------------------------------------------------
+  - name: Pull node graphs & build DOT/PNG
+    block:
+      - name: Get nodes for a WJT
+        uri:
+          url: "{{ awx_host }}/api/v2/workflow_job_templates/{{ item.id }}/workflow_nodes/?page_size=200"
+          headers:
+            Authorization: "Bearer {{ awx_oauthtoken }}"
+          return_content: yes
+          validate_certs: no
+        register: node_resp
+
+      - name: Build nodes + edges dicts
+        set_fact:
+          nodes: |
+            {% set ns = [] %}
+            {% for n in node_resp.json.results %}
+              {% set _ = ns.append({'id': n.id, 'label': n.unified_job_template.name}) %}
+            {% endfor %}
+            {{ ns }}
+          edges: |
+            {% set es = [] %}
+            {% for n in node_resp.json.results %}
+              {% for tgt in n.success_nodes %}
+                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'green'}) %}
+              {% endfor %}
+              {% for tgt in n.failure_nodes %}
+                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'red'}) %}
+              {% endfor %}
+              {% for tgt in n.always_nodes %}
+                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'blue'}) %}
+              {% endfor %}
+            {% endfor %}
+            {{ es }}
+
+      - name: Render DOT file
+        template:
+          src: workflow.dot.j2
+          dest: "{{ tmp_dir }}/{{ item.id }}.dot"
+        vars:
+          nodes: "{{ nodes }}"
+          edges: "{{ edges }}"
+
+      - name: Convert to {{ graph_render_format|upper }}
+        command: >
+          dot -T{{ graph_render_format }} {{ tmp_dir }}/{{ item.id }}.dot
+          -o {{ tmp_dir }}/{{ item.filename }}
+        changed_when: true
+    loop: "{{ workflows }}"
+    loop_control:
+      label: "{{ item.name }}"
+
+  # --------------------------------------------------
+  # 4. Confluence – create or recreate the page
+  # --------------------------------------------------
+  - name: Search for an existing page with same title
+    uri:
+      url: "{{ confluence_base_url }}/rest/api/content?spaceKey={{ confluence_space }}&title={{ confluence_page_title | urlencode }}"
+      headers: "{{ confluence_headers }}"
+      return_content: yes
+    register: page_lookup
+
+  - name: Delete the existing page (and its children) if overwrite true
+    when: page_lookup.json.size|int > 0 and overwrite_page_if_exists|bool
+    uri:
+      url: "{{ confluence_base_url }}/rest/api/content/{{ page_lookup.json.results[0].id }}?status=current"
+      method: DELETE
+      headers: "{{ confluence_headers }}"
+      status_code: 204
+
+  - name: Create the Confluence page
+    uri:
+      url: "{{ confluence_base_url }}/rest/api/content"
+      method: POST
+      headers: "{{ confluence_headers }}"
+      body: |
+        {
+          "type": "page",
+          "title": "{{ confluence_page_title }}",
+          "space": { "key": "{{ confluence_space }}" },
+          {% if confluence_parent_page_id is defined %}
+          "ancestors": [ { "id": "{{ confluence_parent_page_id }}" } ],
+          {% endif %}
+          "body": {
+            "storage": {
+              "value": "<p>Page initialised … attachments will appear in a moment.</p>",
+              "representation": "storage"
+            }
+          }
+        }
+      status_code: 200
+      return_content: yes
+    register: confluence_page
+
+  - set_fact:
+      confluence_page_id: "{{ confluence_page.json.id }}"
+
+  # --------------------------------------------------
+  # 5. Upload every PNG/SVG as attachment
+  # --------------------------------------------------
+  - name: Upload images
+    uri:
+      url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}/child/attachment"
+      method: POST
+      headers:
+        Authorization: "{{ confluence_headers.Authorization }}"
+        X-Atlassian-Token: no-check
+      body_format: form-multipart
+      body:
+        file: "@/{{ tmp_dir }}/{{ item.filename }}"
+      status_code: [200, 201]
+    loop: "{{ workflows }}"
+    loop_control:
+      label: "{{ item.filename }}"
+
+  # --------------------------------------------------
+  # 6. Update the page body to include the images
+  # --------------------------------------------------
+  - name: Build final page body
+    set_fact:
+      final_body: "{{ page_body_template }}"
+
+  - name: Retrieve current version
+    uri:
+      url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}?expand=version"
+      headers: "{{ confluence_headers }}"
+      return_content: yes
+    register: page_current
+
+  - name: PUT updated content
+    uri:
+      url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}"
+      method: PUT
+      headers: "{{ confluence_headers }}"
+      body: |
+        {
+          "id": "{{ confluence_page_id }}",
+          "type": "page",
+          "title": "{{ confluence_page_title }}",
+          "version": { "number": {{ page_current.json.version.number | int + 1 }} },
+          "body": {
+            "storage": {
+              "value": {{ final_body | to_json }},
+              "representation": "storage"
+            }
+          }
+        }
+      status_code: 200
+      return_content: yes
+
+  - name: Summary
+    debug:
+      msg: "✅ Confluence page ready: {{ confluence_base_url }}/pages/{{ confluence_page_id }}"
