@@ -29,217 +29,217 @@
 
   tasks:
 
-  # --------------------------------------------------
-  # 1. Collect **all** Workflow Job Templates (WJTs)
-  # --------------------------------------------------
-  - name: Retrieve **first** page of WJTs
-    uri:
-      url: "{{ awx_host }}/api/v2/workflow_job_templates/?page_size={{ awx_page_size }}"
-      headers:
-        Authorization: "Bearer {{ awx_oauthtoken }}"
-      return_content: yes
-      validate_certs: no
-    register: wjt_page0
+    # --------------------------------------------------
+    # 1. Collect **all** Workflow Job Templates (WJTs)
+    # --------------------------------------------------
+    - name: Retrieve **first** page of WJTs
+      uri:
+        url: "{{ awx_host }}/api/v2/workflow_job_templates/?page_size={{ awx_page_size }}"
+        headers:
+          Authorization: "Bearer {{ awx_oauthtoken }}"
+        return_content: yes
+        validate_certs: no
+      register: wjt_page0
 
-  - name: Initialise list with first‑page results
-    set_fact:
-      workflows_raw: "{{ wjt_page0.json.results }}"
-      total_pages: "{{ ((wjt_page0.json.count + awx_page_size - 1) // awx_page_size) }}"
+    - name: Initialise list with first‑page results
+      set_fact:
+        workflows_raw: "{{ wjt_page0.json.results }}"
+        total_pages: "{{ ((wjt_page0.json.count + awx_page_size - 1) // awx_page_size) }}"
 
-  - name: Retrieve **remaining** WJT pages (if any)
-    when: total_pages | int > 1
-    uri:
-      url: "{{ awx_host }}/api/v2/workflow_job_templates/?page={{ item }}&page_size={{ awx_page_size }}"
-      headers:
-        Authorization: "Bearer {{ awx_oauthtoken }}"
-      return_content: yes
-      validate_certs: no
-    loop: "{{ range(2, total_pages | int + 1) | list }}"
-    register: wjt_pages
+    - name: Retrieve **remaining** WJT pages (if any)
+      when: total_pages | int > 1
+      uri:
+        url: "{{ awx_host }}/api/v2/workflow_job_templates/?page={{ item }}&page_size={{ awx_page_size }}"
+        headers:
+          Authorization: "Bearer {{ awx_oauthtoken }}"
+        return_content: yes
+        validate_certs: no
+      loop: "{{ range(2, total_pages | int + 1) | list }}"
+      register: wjt_pages
 
-  - name: Combine paginated API results
-    when: total_pages | int > 1
-    set_fact:
-      workflows_raw: "{{ workflows_raw + (wjt_pages.results | map(attribute='json.results') | flatten(levels=1)) }}"
+    - name: Combine paginated API results
+      when: total_pages | int > 1
+      set_fact:
+        workflows_raw: "{{ workflows_raw + (wjt_pages.results | map(attribute='json.results') | flatten(levels=1)) }}"
 
-  - name: Build helper list (id, name, safe filename)
-    set_fact:
-      workflows: |
-        {% set out = [] %}
-        {% for w in workflows_raw %}
-        {%   set _ = out.append({
-              'id': w.id,
-              'name': w.name,
-              'filename': (w.name | regex_replace('[^A-Za-z0-9._-]+', '_')) ~ '.' ~ graph_render_format
-            }) %}
-        {% endfor %}
-        {{ out }}
+    - name: Build helper list (id, name, safe filename)
+      set_fact:
+        workflows: |
+          {% set out = [] %}
+          {% for w in workflows_raw %}
+          {%   set _ = out.append({
+                'id': w.id,
+                'name': w.name,
+                'filename': (w.name | regex_replace('[^A-Za-z0-9._-]+', '_')) ~ '.' ~ graph_render_format
+              }) %}
+          {% endfor %}
+          {{ out }}
 
-  - debug:
-      msg: "Found {{ workflows | length }} workflow templates."
+    - debug:
+        msg: "Found {{ workflows | length }} workflow templates."
 
-  # --------------------------------------------------
-  # 2. Prepare working directory
-  # --------------------------------------------------
-  - name: Create temporary working directory
-    file:
-      path: "{{ tmp_dir }}"
-      state: directory
-      mode: "0700"
+    # --------------------------------------------------
+    # 2. Prepare working directory
+    # --------------------------------------------------
+    - name: Create temporary working directory
+      file:
+        path: "{{ tmp_dir }}"
+        state: directory
+        mode: "0700"
 
-  # --------------------------------------------------
-  # 3. For each workflow → pull nodes → render diagram
-  # --------------------------------------------------
-  - name: Pull node graphs & render {{ graph_render_format | upper }}
-    block:
-      - name: Get nodes for a WJT
-        uri:
-          url: "{{ awx_host }}/api/v2/workflow_job_templates/{{ item.id }}/workflow_nodes/?page_size=200"
-          headers:
-            Authorization: "Bearer {{ awx_oauthtoken }}"
-          return_content: yes
-          validate_certs: no
-        register: node_resp
+    # --------------------------------------------------
+    # 3. For each workflow → pull nodes → render diagram
+    # --------------------------------------------------
+    - name: Pull node graphs & render {{ graph_render_format | upper }}
+      block:
+        - name: Get nodes for a WJT
+          uri:
+            url: "{{ awx_host }}/api/v2/workflow_job_templates/{{ item.id }}/workflow_nodes/?page_size=200"
+            headers:
+              Authorization: "Bearer {{ awx_oauthtoken }}"
+            return_content: yes
+            validate_certs: no
+          register: node_resp
 
-      - name: Build **nodes** & **edges** structures
-        set_fact:
-          nodes: |
-            {% set ns = [] %}
-            {% for n in node_resp.json.results %}
-              {% set _ = ns.append({'id': n.id, 'label': n.unified_job_template.name}) %}
-            {% endfor %}
-            {{ ns }}
-          edges: |
-            {% set es = [] %}
-            {% for n in node_resp.json.results %}
-              {% for tgt in n.success_nodes %}
-                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color': 'green'}) %}
+        - name: Build **nodes** & **edges** structures
+          set_fact:
+            nodes: |
+              {% set ns = [] %}
+              {% for n in node_resp.json.results %}
+                {% set _ = ns.append({'id': n.id, 'label': n.unified_job_template.name}) %}
               {% endfor %}
-              {% for tgt in n.failure_nodes %}
-                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color': 'red'}) %}
+              {{ ns }}
+            edges: |
+              {% set es = [] %}
+              {% for n in node_resp.json.results %}
+                {% for tgt in n.success_nodes %}
+                  {% set _ = es.append({'src': n.id, 'dst': tgt, 'color': 'green'}) %}
+                {% endfor %}
+                {% for tgt in n.failure_nodes %}
+                  {% set _ = es.append({'src': n.id, 'dst': tgt, 'color': 'red'}) %}
+                {% endfor %}
+                {% for tgt in n.always_nodes %}
+                  {% set _ = es.append({'src': n.id, 'dst': tgt, 'color': 'blue'}) %}
+                {% endfor %}
               {% endfor %}
-              {% for tgt in n.always_nodes %}
-                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color': 'blue'}) %}
-              {% endfor %}
-            {% endfor %}
-            {{ es }}
+              {{ es }}
 
-      - name: Render Graphviz **DOT** file
-        template:
-          src: workflow.dot.j2
-          dest: "{{ tmp_dir }}/{{ item.id }}.dot"
-        vars:
-          nodes: "{{ nodes }}"
-          edges: "{{ edges }}"
+        - name: Render Graphviz **DOT** file
+          template:
+            src: workflow.dot.j2
+            dest: "{{ tmp_dir }}/{{ item.id }}.dot"
+          vars:
+            nodes: "{{ nodes }}"
+            edges: "{{ edges }}"
 
-      - name: Convert DOT → {{ graph_render_format | upper }}
-        command: >-
-          dot -T{{ graph_render_format }} {{ tmp_dir }}/{{ item.id }}.dot -o {{ tmp_dir }}/{{ item.filename }}
-        changed_when: true
-    loop: "{{ workflows }}"
-    loop_control:
-      label: "{{ item.name }}"
+        - name: Convert DOT → {{ graph_render_format | upper }}
+          command: >-
+            dot -T{{ graph_render_format }} {{ tmp_dir }}/{{ item.id }}.dot -o {{ tmp_dir }}/{{ item.filename }}
+          changed_when: true
+      loop: "{{ workflows }}"
+      loop_control:
+        label: "{{ item.name }}"
 
-  # --------------------------------------------------
-  # 4. Confluence – create (or recreate) the target page
-  # --------------------------------------------------
-  - name: Search for an existing page with the same title
-    uri:
-      url: "{{ confluence_base_url }}/rest/api/content?spaceKey={{ confluence_space }}&title={{ confluence_page_title | urlencode }}"
-      headers: "{{ confluence_headers }}"
-      return_content: yes
-    register: page_lookup
+    # --------------------------------------------------
+    # 4. Confluence – create (or recreate) the target page
+    # --------------------------------------------------
+    - name: Search for an existing page with the same title
+      uri:
+        url: "{{ confluence_base_url }}/rest/api/content?spaceKey={{ confluence_space }}&title={{ confluence_page_title | urlencode }}"
+        headers: "{{ confluence_headers }}"
+        return_content: yes
+      register: page_lookup
 
-  - name: Delete the existing page (and its children) if overwrite enabled
-    when: page_lookup.json.size | int > 0 and overwrite_page_if_exists | bool
-    uri:
-      url: "{{ confluence_base_url }}/rest/api/content/{{ page_lookup.json.results[0].id }}?status=current"
-      method: DELETE
-      headers: "{{ confluence_headers }}"
-      status_code: 204
+    - name: Delete the existing page (and its children) if overwrite enabled
+      when: page_lookup.json.size | int > 0 and overwrite_page_if_exists | bool
+      uri:
+        url: "{{ confluence_base_url }}/rest/api/content/{{ page_lookup.json.results[0].id }}?status=current"
+        method: DELETE
+        headers: "{{ confluence_headers }}"
+        status_code: 204
 
-  - name: Create a new Confluence page
-    uri:
-      url: "{{ confluence_base_url }}/rest/api/content"
-      method: POST
-      headers: "{{ confluence_headers }}"
-      body: |
-        {
-          "type": "page",
-          "title": "{{ confluence_page_title }}",
-          "space": { "key": "{{ confluence_space }}" },
-          {% if confluence_parent_page_id is defined %}
-          "ancestors": [ { "id": "{{ confluence_parent_page_id }}" } ],
-          {% endif %}
-          "body": {
-            "storage": {
-              "value": "<p>Page initialised … attachments will appear in a moment.</p>",
-              "representation": "storage"
+    - name: Create a new Confluence page
+      uri:
+        url: "{{ confluence_base_url }}/rest/api/content"
+        method: POST
+        headers: "{{ confluence_headers }}"
+        body: |
+          {
+            "type": "page",
+            "title": "{{ confluence_page_title }}",
+            "space": { "key": "{{ confluence_space }}" },
+            {% if confluence_parent_page_id is defined %}
+            "ancestors": [ { "id": "{{ confluence_parent_page_id }}" } ],
+            {% endif %}
+            "body": {
+              "storage": {
+                "value": "<p>Page initialised … attachments will appear in a moment.</p>",
+                "representation": "storage"
+              }
             }
           }
-        }
-      status_code: 200
-      return_content: yes
-    register: confluence_page
+        status_code: 200
+        return_content: yes
+      register: confluence_page
 
-  - set_fact:
-      confluence_page_id: "{{ confluence_page.json.id }}"
+    - set_fact:
+        confluence_page_id: "{{ confluence_page.json.id }}"
 
-  # --------------------------------------------------
-  # 5. Upload every diagram as an attachment
-  # --------------------------------------------------
-  - name: Upload rendered diagrams
-    uri:
-      url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}/child/attachment"
-      method: POST
-      headers:
-        Authorization: "{{ confluence_headers.Authorization }}"
-        X-Atlassian-Token: no-check
-      body_format: form-multipart
-      body:
-        file: "@/{{ tmp_dir }}/{{ item.filename }}"
-      status_code: [200, 201]
-    loop: "{{ workflows }}"
-    loop_control:
-      label: "{{ item.filename }}"
+    # --------------------------------------------------
+    # 5. Upload every diagram as an attachment
+    # --------------------------------------------------
+    - name: Upload rendered diagrams
+      uri:
+        url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}/child/attachment"
+        method: POST
+        headers:
+          Authorization: "{{ confluence_headers.Authorization }}"
+          X-Atlassian-Token: no-check
+        body_format: form-multipart
+        body:
+          file: "@/{{ tmp_dir }}/{{ item.filename }}"
+        status_code: [200, 201]
+      loop: "{{ workflows }}"
+      loop_control:
+        label: "{{ item.filename }}"
 
-  # --------------------------------------------------
-  # 6. Replace the page body so the images show inline
-  # --------------------------------------------------
-  - name: Build final page body
-    set_fact:
-      final_body: "{{ page_body_template }}"
+    # --------------------------------------------------
+    # 6. Replace the page body so the images show inline
+    # --------------------------------------------------
+    - name: Build final page body
+      set_fact:
+        final_body: "{{ page_body_template }}"
 
-  - name: Get current page version number
-    uri:
-      url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}?expand=version"
-      headers: "{{ confluence_headers }}"
-      return_content: yes
-    register: page_current
+    - name: Get current page version number
+      uri:
+        url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}?expand=version"
+        headers: "{{ confluence_headers }}"
+        return_content: yes
+      register: page_current
 
-  - name: Update Confluence page with inline images
-    uri:
-      url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}"
-      method: PUT
-      headers: "{{ confluence_headers }}"
-      body: |
-        {
-          "id": "{{ confluence_page_id }}",
-          "type": "page",
-          "title": "{{ confluence_page_title }}",
-          "version": { "number": {{ page_current.json.version.number | int + 1 }} },
-          "body": {
-            "storage": {
-              "value": {{ final_body | to_json }},
-              "representation": "storage"
+    - name: Update Confluence page with inline images
+      uri:
+        url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}"
+        method: PUT
+        headers: "{{ confluence_headers }}"
+        body: |
+          {
+            "id": "{{ confluence_page_id }}",
+            "type": "page",
+            "title": "{{ confluence_page_title }}",
+            "version": { "number": {{ page_current.json.version.number | int + 1 }} },
+            "body": {
+              "storage": {
+                "value": {{ final_body | to_json }},
+                "representation": "storage"
+              }
             }
           }
-        }
-      status_code: 200
-      return_content: yes
+        status_code: 200
+        return_content: yes
 
-  - name: ✅ Summary
-    debug:
-      msg: "Confluence page ready: {{ confluence_base_url }}/pages/{{ confluence_page_id }}"
+    - name: ✅ Summary
+      debug:
+        msg: "Confluence page ready: {{ confluence_base_url }}/pages/{{ confluence_page_id }}"
 
 ...

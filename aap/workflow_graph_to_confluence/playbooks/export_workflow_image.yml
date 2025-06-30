@@ -15,92 +15,89 @@
 
   tasks:
 
-  - name: Lookup workflow ID if only the name was given
-    when: workflow_id is not defined
-    uri:
-      url: "{{ awx_host }}/api/v2/workflow_job_templates/?name={{ workflow_name | urlencode }}"
-      headers:
-        Authorization: "Bearer {{ awx_oauthtoken }}"
-      return_content: yes
-      validate_certs: no
-    register: wjt_lookup
-    
-  - name: Create workflow_id
-    set_fact:
-      workflow_id: "{{ (wjt_lookup.json.results | first).id }}"
-    when:
-      - workflow_id is not defined
-      - wjt_lookup.json.count | int > 0
+    - name: Lookup workflow ID if only the name was given
+      when: workflow_id is not defined
+      uri:
+        url: "{{ awx_host }}/api/v2/workflow_job_templates/?name={{ workflow_name | urlencode }}"
+        headers:
+          Authorization: "Bearer {{ awx_oauthtoken }}"
+        return_content: yes
+        validate_certs: no
+      register: wjt_lookup
+      
+    - name: Create workflow_id
+      set_fact: 
+        workflow_id: "{{ (wjt_lookup.json.results | first).id }}"
+      when:
+        - workflow_id is not defined
+        - wjt_lookup.json.count | int > 0
 
-  - name: Pull nodes for that WJT
-    uri:
-      url: "{{ awx_host }}/api/v2/workflow_job_templates/{{ workflow_id }}/workflow_nodes/?page_size=200"
-      headers:
-        Authorization: "Bearer {{ awx_oauthtoken }}"
-      return_content: yes
-      validate_certs: no
-    register: nodes_raw
+    - name: Pull nodes for that WJT
+      uri:
+        url: "{{ awx_host }}/api/v2/workflow_job_templates/{{ workflow_id }}/workflow_nodes/?page_size=200"
+        headers:
+          Authorization: "Bearer {{ awx_oauthtoken }}"
+        return_content: yes
+        validate_certs: no
+      register: nodes_raw
 
-  - name: Build node + edge structures for Graphviz
-    set_fact:
-      nodes: |
-        {% set ns = [] %}
-        {% for n in nodes_raw.json.results %}
-          {% set _ = ns.append({'id': n.id,
-                                'label': n.unified_job_template.name ~
-                                         ('\\n' ~ n.success_nodes|length ~ ' ✔ / ' ~
-                                          n.failure_nodes|length ~ ' ✖ / ' ~
-                                          n.always_nodes|length ~ ' ↻') }) %}
-        {% endfor %}
-        {{ ns }}
-      edges: |
-        {% set es = [] %}
-        {% for n in nodes_raw.json.results %}
-          {% for tgt in n.success_nodes %}
-            {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'green'}) %}
+    - name: Build node + edge structures for Graphviz
+      set_fact:
+        nodes: |
+          {% set ns = [] %}
+          {% for n in nodes_raw.json.results %}
+            {% set _ = ns.append({'id': n.id,
+                                  'label': n.unified_job_template.name ~
+                                          ('\\n' ~ n.success_nodes|length ~ ' ✔ / ' ~
+                                            n.failure_nodes|length ~ ' ✖ / ' ~
+                                            n.always_nodes|length ~ ' ↻') }) %}
           {% endfor %}
-          {% for tgt in n.failure_nodes %}
-            {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'red'}) %}
+          {{ ns }}
+        edges: |
+          {% set es = [] %}
+          {% for n in nodes_raw.json.results %}
+            {% for tgt in n.success_nodes %}
+              {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'green'}) %}
+            {% endfor %}
+            {% for tgt in n.failure_nodes %}
+              {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'red'}) %}
+            {% endfor %}
+            {% for tgt in n.always_nodes %}
+              {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'blue'}) %}
+            {% endfor %}
           {% endfor %}
-          {% for tgt in n.always_nodes %}
-            {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'blue'}) %}
-          {% endfor %}
-        {% endfor %}
-        {{ es }}
+          {{ es }}
 
-  - name: Render DOT file
-    template:
-      src: workflow.dot.j2
-      dest: /tmp/workflow_{{ workflow_id }}.dot
-    vars:
-      nodes: "{{ nodes }}"
-      edges: "{{ edges }}"
+    - name: Render DOT file
+      template:
+        src: workflow.dot.j2
+        dest: /tmp/workflow_{{ workflow_id }}.dot
 
-  - name: Convert to PNG
-    command: >
-      dot -Tpng /tmp/workflow_{{ workflow_id }}.dot
-      -o /tmp/workflow_{{ workflow_id }}.png
-    changed_when: true
+    - name: Convert to PNG
+      command: >
+        dot -Tpng /tmp/workflow_{{ workflow_id }}.dot
+        -o /tmp/workflow_{{ workflow_id }}.png
+      changed_when: true
 
-  - name: Upload PNG to Confluence (optional)
-    when: attach_to_confluence | bool
-    uri:
-      url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}/child/attachment"
-      method: POST
-      user: "{{ confluence_user }}"
-      password: "{{ confluence_pass }}"
-      force_basic_auth: yes
-      headers:
-        X-Atlassian-Token: no-check
-      body_format: form-multipart
-      body:
-        file: "@/tmp/workflow_{{ workflow_id }}.png"
-      status_code: [200,201]
-    register: confluence_upload
+    - name: Upload PNG to Confluence (optional)
+      when: attach_to_confluence | bool
+      uri:
+        url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}/child/attachment"
+        method: POST
+        user: "{{ confluence_user }}"
+        password: "{{ confluence_pass }}"
+        force_basic_auth: yes
+        headers:
+          X-Atlassian-Token: no-check
+        body_format: form-multipart
+        body:
+          file: "@/tmp/workflow_{{ workflow_id }}.png"
+        status_code: [200,201]
+      register: confluence_upload
 
-  - name: Show result
-    debug:
-      msg: >-
-        Image saved to /tmp/workflow_{{ workflow_id }}.png{% if attach_to_confluence|bool %}
-        and attached to Confluence (attachment id:
-        {{ confluence_upload.json.results[0].id }}).{% endif %}
+    - name: Show result
+      debug:
+        msg: >-
+          Image saved to /tmp/workflow_{{ workflow_id }}.png{% if attach_to_confluence|bool %}
+          and attached to Confluence (attachment id:
+          {{ confluence_upload.json.results[0].id }}).{% endif %}
