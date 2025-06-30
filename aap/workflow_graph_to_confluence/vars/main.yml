@@ -12,7 +12,14 @@ workflow_name: My-Pipeline  # …or let the playbook resolve it
 confluence_base_url: https://confluence.example.com
 confluence_user: "{{ lookup('env','CONFLUENCE_USER') }}"
 confluence_pass: "{{ lookup('env','CONFLUENCE_PASS') }}"
+
 confluence_page_id: 1234567        # numeric Content-ID of the target page
 attach_to_confluence: true         # set false to skip the upload step
+confluence_space: DEV
+confluence_page_title: "AWX Workflows Catalogue"
+overwrite_page_if_exists: true              # delete & recreate if a page with that title already exists
+graph_render_format: png                    # png or svg (Confluence supports both)
+tmp_dir: /tmp/awx_workflows                 # working area inside the job container
+
 
 ...
