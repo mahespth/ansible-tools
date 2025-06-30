@@ -9,6 +9,26 @@
     export_file: "/path/to/project_export.tar.gz"
 
   tasks:
+  - name: Get old project info
+      uri:
+        url: "{{ gitlab_url }}/api/v4/projects/{{ project_namespace }}%2F{{ project_name }}-old"
+        headers:
+          PRIVATE-TOKEN: "{{ private_token }}"
+        method: GET
+        return_content: yes
+      register: old_project_info
+      
+    - name: Delete old  GitLab project if it exists
+      when: delete_old_project | default(false) | bool
+      uri:
+        url: "{{ gitlab_url }}/api/v4/projects/{{ project_namespace }}%2F{{ project_name }}-old"
+        method: DELETE
+        headers:
+          PRIVATE-TOKEN: "{{ private_token }}"
+        status_code: 202
+      register: delete_result
+      failed_when: false
+      
 
     - name: Get project info
       uri:
@@ -19,7 +39,7 @@
         return_content: yes
       register: project_info
       failed_when: project_info.status not in [200, 404]
-
+      
     - name: Rename project to "-old" if it exists
       when: project_info.status == 200
       uri:
