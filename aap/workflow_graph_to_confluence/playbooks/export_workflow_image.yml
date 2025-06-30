@@ -1,4 +1,8 @@
 ---
+
+# Steve Maher, Export workflow to a image.
+# ---------------------------------------------
+
 - name: Generate a PNG of an AWX/AAP workflow
   hosts: localhost
   connection: local
