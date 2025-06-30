@@ -24,7 +24,9 @@
       return_content: yes
       validate_certs: no
     register: wjt_lookup
-  - set_fact:
+    
+  - name: Create workflow_id
+    set_fact:
       workflow_id: "{{ (wjt_lookup.json.results | first).id }}"
     when:
       - workflow_id is not defined
