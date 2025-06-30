@@ -45,6 +45,19 @@
       register: curl_result
       failed_when: curl_result.rc != 0
 
+    - name: Wait for project import to finish
+      uri:
+        url: "{{ gitlab_url }}/api/v4/projects/{{ project_namespace }}%2F{{ project_name }}/import"
+        headers:
+          PRIVATE-TOKEN: "{{ private_token }}"
+        method: GET
+        return_content: yes
+      register: import_status
+      until: import_status.json.status == "finished"
+      retries: 20
+      delay: 10
+
+
     - name: Debug curl result
       debug:
         var: curl_result.stdout
