@@ -1,0 +1,14 @@
+digraph awx_workflow {
+  rankdir=LR;
+  node [shape=box, style=rounded, fontname="Arial"];
+
+  {#-- draw all nodes --#}
+  {% for n in nodes %}
+  "{{ n.id }}" [ label="{{ n.label | replace('"', '\\"') }}" ];
+  {% endfor %}
+
+  {#-- draw edges; green = success, red = failure, blue = always --#}
+  {% for e in edges %}
+  "{{ e.src }}" -> "{{ e.dst }}" [ color="{{ e.color }}" ];
+  {% endfor %}
+}
