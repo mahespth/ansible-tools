@@ -3,8 +3,6 @@
 # Steve Maher, Export all workflows to confluence
 # ------------------------------------------------
 
-
-
 - name: Export ALL AWX workflows to a single Confluence page
   hosts: localhost
   connection: local
@@ -13,7 +11,7 @@
     - ../vars/main.yml
 
   collections:
-    - community.general       # for uri improvements
+    - community.general  # for the improved **uri** module
 
   vars:
     awx_page_size: 200
@@ -32,9 +30,9 @@
   tasks:
 
   # --------------------------------------------------
-  # 1. Get ALL Workflow Job Templates
+  # 1. Collect **all** Workflow Job Templates (WJTs)
   # --------------------------------------------------
-  - name: Retrieve first page of WJTs
+  - name: Retrieve **first** page of WJTs
     uri:
       url: "{{ awx_host }}/api/v2/workflow_job_templates/?page_size={{ awx_page_size }}"
       headers:
@@ -43,33 +41,39 @@
       validate_certs: no
     register: wjt_page0
 
-  - name: Collect paginated results
+  - name: Initialise list with first‑page results
     set_fact:
       workflows_raw: "{{ wjt_page0.json.results }}"
-    loop: "{{ range(2, ((wjt_page0.json.count / awx_page_size) | round(0, 'floor')) + 1) | list }}"
-    loop_control:
-      loop_var: page_no
+      total_pages: "{{ ((wjt_page0.json.count + awx_page_size - 1) // awx_page_size) }}"
+
+  - name: Retrieve **remaining** WJT pages (if any)
+    when: total_pages | int > 1
     uri:
-      url: "{{ awx_host }}/api/v2/workflow_job_templates/?page={{ page_no }}&page_size={{ awx_page_size }}"
+      url: "{{ awx_host }}/api/v2/workflow_job_templates/?page={{ item }}&page_size={{ awx_page_size }}"
       headers:
         Authorization: "Bearer {{ awx_oauthtoken }}"
       return_content: yes
       validate_certs: no
-    register: next_page
-    vars:
-      ansible_python_interpreter: "{{ ansible_playbook_python }}"
-    when: wjt_page0.json.count > awx_page_size
+    loop: "{{ range(2, total_pages | int + 1) | list }}"
+    register: wjt_pages
+
+  - name: Combine paginated API results
+    when: total_pages | int > 1
     set_fact:
-      workflows_raw: "{{ workflows_raw + next_page.json.results }}"
+      workflows_raw: "{{ workflows_raw + (wjt_pages.results | map(attribute='json.results') | flatten(levels=1)) }}"
 
   - name: Build helper list (id, name, safe filename)
     set_fact:
       workflows: |
-        {{ workflows_raw | map('extract', 'id') | zip(workflows_raw | map(attribute='name')) |
-           map('community.general.dict_kv', keys=['id','name']) |
-           map('combine', {'filename': item.name | regex_replace('[^A-Za-z0-9._-]+','_') ~ '.' ~ graph_render_format }) | list }}
-    vars:
-      item: "{{ item }}"
+        {% set out = [] %}
+        {% for w in workflows_raw %}
+        {%   set _ = out.append({
+              'id': w.id,
+              'name': w.name,
+              'filename': (w.name | regex_replace('[^A-Za-z0-9._-]+', '_')) ~ '.' ~ graph_render_format
+            }) %}
+        {% endfor %}
+        {{ out }}
 
   - debug:
       msg: "Found {{ workflows | length }} workflow templates."
@@ -77,16 +81,16 @@
   # --------------------------------------------------
   # 2. Prepare working directory
   # --------------------------------------------------
-  - name: Create tmp directory
+  - name: Create temporary working directory
     file:
       path: "{{ tmp_dir }}"
       state: directory
-      mode: 0700
+      mode: "0700"
 
   # --------------------------------------------------
-  # 3. For each workflow → pull nodes → render PNG/SVG
+  # 3. For each workflow → pull nodes → render diagram
   # --------------------------------------------------
-  - name: Pull node graphs & build DOT/PNG
+  - name: Pull node graphs & render {{ graph_render_format | upper }}
     block:
       - name: Get nodes for a WJT
         uri:
@@ -97,7 +101,7 @@
           validate_certs: no
         register: node_resp
 
-      - name: Build nodes + edges dicts
+      - name: Build **nodes** & **edges** structures
         set_fact:
           nodes: |
             {% set ns = [] %}
@@ -109,18 +113,18 @@
             {% set es = [] %}
             {% for n in node_resp.json.results %}
               {% for tgt in n.success_nodes %}
-                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'green'}) %}
+                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color': 'green'}) %}
               {% endfor %}
               {% for tgt in n.failure_nodes %}
-                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'red'}) %}
+                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color': 'red'}) %}
               {% endfor %}
               {% for tgt in n.always_nodes %}
-                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color':'blue'}) %}
+                {% set _ = es.append({'src': n.id, 'dst': tgt, 'color': 'blue'}) %}
               {% endfor %}
             {% endfor %}
             {{ es }}
 
-      - name: Render DOT file
+      - name: Render Graphviz **DOT** file
         template:
           src: workflow.dot.j2
           dest: "{{ tmp_dir }}/{{ item.id }}.dot"
@@ -128,34 +132,33 @@
           nodes: "{{ nodes }}"
           edges: "{{ edges }}"
 
-      - name: Convert to {{ graph_render_format|upper }}
-        command: >
-          dot -T{{ graph_render_format }} {{ tmp_dir }}/{{ item.id }}.dot
-          -o {{ tmp_dir }}/{{ item.filename }}
+      - name: Convert DOT → {{ graph_render_format | upper }}
+        command: >-
+          dot -T{{ graph_render_format }} {{ tmp_dir }}/{{ item.id }}.dot -o {{ tmp_dir }}/{{ item.filename }}
         changed_when: true
     loop: "{{ workflows }}"
     loop_control:
       label: "{{ item.name }}"
 
   # --------------------------------------------------
-  # 4. Confluence – create or recreate the page
+  # 4. Confluence – create (or recreate) the target page
   # --------------------------------------------------
-  - name: Search for an existing page with same title
+  - name: Search for an existing page with the same title
     uri:
       url: "{{ confluence_base_url }}/rest/api/content?spaceKey={{ confluence_space }}&title={{ confluence_page_title | urlencode }}"
       headers: "{{ confluence_headers }}"
       return_content: yes
     register: page_lookup
 
-  - name: Delete the existing page (and its children) if overwrite true
-    when: page_lookup.json.size|int > 0 and overwrite_page_if_exists|bool
+  - name: Delete the existing page (and its children) if overwrite enabled
+    when: page_lookup.json.size | int > 0 and overwrite_page_if_exists | bool
     uri:
       url: "{{ confluence_base_url }}/rest/api/content/{{ page_lookup.json.results[0].id }}?status=current"
       method: DELETE
       headers: "{{ confluence_headers }}"
       status_code: 204
 
-  - name: Create the Confluence page
+  - name: Create a new Confluence page
     uri:
       url: "{{ confluence_base_url }}/rest/api/content"
       method: POST
@@ -183,9 +186,9 @@
       confluence_page_id: "{{ confluence_page.json.id }}"
 
   # --------------------------------------------------
-  # 5. Upload every PNG/SVG as attachment
+  # 5. Upload every diagram as an attachment
   # --------------------------------------------------
-  - name: Upload images
+  - name: Upload rendered diagrams
     uri:
       url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}/child/attachment"
       method: POST
@@ -201,20 +204,20 @@
       label: "{{ item.filename }}"
 
   # --------------------------------------------------
-  # 6. Update the page body to include the images
+  # 6. Replace the page body so the images show inline
   # --------------------------------------------------
   - name: Build final page body
     set_fact:
       final_body: "{{ page_body_template }}"
 
-  - name: Retrieve current version
+  - name: Get current page version number
     uri:
       url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}?expand=version"
       headers: "{{ confluence_headers }}"
       return_content: yes
     register: page_current
 
-  - name: PUT updated content
+  - name: Update Confluence page with inline images
     uri:
       url: "{{ confluence_base_url }}/rest/api/content/{{ confluence_page_id }}"
       method: PUT
@@ -235,6 +238,8 @@
       status_code: 200
       return_content: yes
 
-  - name: Summary
+  - name: ✅ Summary
     debug:
-      msg: "✅ Confluence page ready: {{ confluence_base_url }}/pages/{{ confluence_page_id }}"
+      msg: "Confluence page ready: {{ confluence_base_url }}/pages/{{ confluence_page_id }}"
+
+...
