@@ -1,0 +1,65 @@
+---
+- name: Upload EE to Hub using skopeo and configure in AAP
+  hosts: localhost
+  gather_facts: false
+  vars:
+    ee_name: "custom-ee"
+    ee_image_local: "custom-ee:latest"
+    ee_registry_url: "hub.example.com/ee/custom-ee:latest"
+    controller_url: "https://aap-controller.example.com"
+    controller_username: "admin"
+    controller_password: "your-password"
+    registry_username: "hub-user"
+    registry_password: "hub-password"
+    validate_certs: false
+
+  tasks:
+
+    - name: Push EE to Automation Hub using skopeo
+      ansible.builtin.command:
+        cmd: >-
+          skopeo copy
+          --dest-creds {{ registry_username }}:{{ registry_password }}
+          --dest-tls-verify={{ 'true' if validate_certs else 'false' }}
+          docker-daemon:{{ ee_image_local }}
+          docker://{{ ee_registry_url }}
+      changed_when: true
+
+    - name: Get authentication token from AAP controller
+      uri:
+        url: "{{ controller_url }}/api/v2/tokens/"
+        method: POST
+        user: "{{ controller_username }}"
+        password: "{{ controller_password }}"
+        force_basic_auth: yes
+        status_code: 201
+        return_content: yes
+        validate_certs: "{{ validate_certs }}"
+      register: controller_token
+
+    - name: Set token fact
+      set_fact:
+        auth_token: "{{ controller_token.json.token }}"
+
+    - name: Check if Execution Environment exists
+      uri:
+        url: "{{ controller_url }}/api/v2/execution_environments/?name={{ ee_name }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ auth_token }}"
+        validate_certs: "{{ validate_certs }}"
+      register: ee_lookup
+
+    - name: Create Execution Environment in AAP if not exists
+      uri:
+        url: "{{ controller_url }}/api/v2/execution_environments/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ auth_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ ee_name }}"
+          image: "{{ ee_registry_url }}"
+        validate_certs: "{{ validate_certs }}"
+      when: ee_lookup.json.count == 0
