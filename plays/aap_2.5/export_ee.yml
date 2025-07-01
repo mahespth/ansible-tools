@@ -1,0 +1,19 @@
+- name: Export EE image from Automation Hub to tar file
+  hosts: localhost
+  gather_facts: false
+  vars:
+    ee_registry_url: "hub.example.com/ee/custom-ee:latest"
+    tar_path: "/tmp/custom-ee.tar"
+    registry_username: "hub-user"
+    registry_password: "hub-password"
+    validate_certs: false
+  tasks:
+
+    - name: Export EE image using skopeo to tar file
+      ansible.builtin.command: >-
+        skopeo copy
+        --src-creds {{ registry_username }}:{{ registry_password }}
+        --src-tls-verify={{ 'true' if validate_certs else 'false' }}
+        docker://{{ ee_registry_url }}
+        docker-archive:{{ tar_path }}
+      changed_when: true
