@@ -1,0 +1,16 @@
+---
+- name: Demo playbook with merge
+  hosts: localhost
+  gather_facts: false
+  vars:
+    default_config:
+      setting1: "default1"
+      setting2: "default2"
+      setting3: "default3"
+
+    myconfig: "{{ default_config | combine(extra_config | default({}), recursive=True) }}"
+
+  tasks:
+    - name: Show config
+      debug:
+        var: myconfig
