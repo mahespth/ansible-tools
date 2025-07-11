@@ -10,6 +10,14 @@
 #  >>> inv.delete()
 # ----------------------------------------------
 
+# Example output:
+# ----------------------------------------------
+# Model: Inventory
+#   ID: 1, Name: Demo Inventory
+#   ID: 255, Name: DEV Abdu
+#   ID: 252, Name: scrap
+#   ID: 253, Name: test dev inv isses
+#   ID: 251, Name: Test Inventory
 
 from django.apps import apps
 
