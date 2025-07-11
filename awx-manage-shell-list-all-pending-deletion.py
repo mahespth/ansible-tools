@@ -1,6 +1,14 @@
 
 
 # run from awx-manage shell
+# from awx.main.models.inventory import Inventory
+#  >>> inv = Inventory.objects.get(id=262)
+#  >>> inv
+#  <Inventory: xxxxxxxxx-262>
+#  >>> inv.pending_deletion
+#  True
+#  >>> inv.delete()
+# ----------------------------------------------
 
 
 from django.apps import apps
