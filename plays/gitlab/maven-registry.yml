@@ -1,0 +1,74 @@
+---
+- name: Mirror Maven artifact between GitLab instances
+  hosts: localhost
+  vars:
+    group_id: "com.example"
+    artifact_id: "my-lib"
+    version: "1.0.0"
+    packaging: "jar"
+
+    source_gitlab_project_id: "123"   # Source GitLab project ID
+    dest_gitlab_project_id: "456"     # Destination GitLab project ID
+
+    source_gitlab_registry: "https://gitlab-source.example.com/api/v4/projects/{{ source_gitlab_project_id }}/packages/maven"
+    dest_gitlab_registry: "https://gitlab-destination.example.com/api/v4/projects/{{ dest_gitlab_project_id }}/packages/maven"
+
+    maven_settings_path: "/tmp/maven-settings.xml"
+
+  vars_prompt:
+    - name: source_token
+      prompt: "Enter GitLab source access token"
+      private: yes
+    - name: dest_token
+      prompt: "Enter GitLab destination access token"
+      private: yes
+
+  tasks:
+    - name: Create Maven settings.xml with credentials
+      copy:
+        dest: "{{ maven_settings_path }}"
+        content: |
+          <settings>
+            <servers>
+              <server>
+                <id>gitlab-source</id>
+                <username>gitlab-ci-token</username>
+                <password>{{ source_token }}</password>
+              </server>
+              <server>
+                <id>gitlab-destination</id>
+                <username>gitlab-ci-token</username>
+                <password>{{ dest_token }}</password>
+              </server>
+            </servers>
+          </settings>
+
+    - name: Download Maven artifact from source GitLab
+      shell: |
+        mvn dependency:get \
+          -DremoteRepositories={{ source_gitlab_registry }} \
+          -DgroupId={{ group_id }} \
+          -DartifactId={{ artifact_id }} \
+          -Dversion={{ version }} \
+          -Dpackaging={{ packaging }} \
+          -s {{ maven_settings_path }}
+      args:
+        executable: /bin/bash
+
+    - name: Find downloaded artifact path
+      set_fact:
+        artifact_path: "~/.m2/repository/{{ group_id | replace('.', '/') }}/{{ artifact_id }}/{{ version }}/{{ artifact_id }}-{{ version }}.{{ packaging }}"
+
+    - name: Deploy artifact to destination GitLab
+      shell: |
+        mvn deploy:deploy-file \
+          -DrepositoryId=gitlab-destination \
+          -Durl={{ dest_gitlab_registry }} \
+          -Dfile={{ artifact_path }} \
+          -DgroupId={{ group_id }} \
+          -DartifactId={{ artifact_id }} \
+          -Dversion={{ version }} \
+          -Dpackaging={{ packaging }} \
+          -s {{ maven_settings_path }}
+      args:
+        executable: /bin/bash
