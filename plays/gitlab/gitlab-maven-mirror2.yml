@@ -1,0 +1,128 @@
+---
+- name: Mirror Maven packages: GitLab -> GitLab
+  hosts: mirror_host
+  gather_facts: false
+  vars:
+    # --- SOURCE ---
+    src_base: "https://gitlab.src.example.com"
+    src_project_id: 12345                        # or use group-level listing instead
+    src_token: "{{ lookup('env','SOURCE_PRIVATE_TOKEN') }}"
+    src_per_page: 100
+
+    # --- TARGET ---
+    tgt_base: "https://gitlab.tgt.example.com"
+    tgt_project_id: 67890
+    tgt_repo_url: "{{ tgt_base }}/api/v4/projects/{{ tgt_project_id }}/packages/maven"
+    tgt_username: "gitlab-ci-token"             # or your username if using PAT
+    tgt_token: "{{ lookup('env','TARGET_DEPLOY_TOKEN') }}"
+
+    workdir: "/tmp/gitlab-maven-mirror"
+
+  tasks:
+    - name: Ensure workdir
+      file: { path: "{{ workdir }}", state: directory }
+
+    - name: List Maven packages from source project
+      uri:
+        url: "{{ src_base }}/api/v4/projects/{{ src_project_id }}/packages?package_type=maven&per_page={{ src_per_page }}"
+        headers: { "PRIVATE-TOKEN": "{{ src_token }}" }
+        return_content: true
+      register: src_packages
+
+    - name: Convert packages JSON
+      set_fact:
+        maven_packages: "{{ src_packages.json | default([]) }}"
+
+    - name: Loop over each Maven package (version)
+      loop: "{{ maven_packages }}"
+      loop_control: { loop_var: pkg }
+      vars:
+        pkg_id: "{{ pkg.id }}"
+      block:
+
+        - name: List files for package {{ pkg.name }} {{ pkg.version }}
+          uri:
+            url: "{{ src_base }}/api/v4/projects/{{ src_project_id }}/packages/{{ pkg_id }}/package_files"
+            headers: { "PRIVATE-TOKEN": "{{ src_token }}" }
+            return_content: true
+          register: pkg_files
+
+        - name: Pick files (pom/jar/sources/javadoc)
+          set_fact:
+            pom_file: "{{ (pkg_files.json | selectattr('file_name','search','\\.pom$') | list)[0] | default(None) }}"
+            main_jar: "{{ (pkg_files.json | selectattr('file_name','search','-(?:javadoc|sources)\\.jar$','invert') | selectattr('file_name','search','\\.jar$') | list)[0] | default(None) }}"
+            sources_jar: "{{ (pkg_files.json | selectattr('file_name','search','-sources\\.jar$') | list)[0] | default(None) }}"
+            javadoc_jar: "{{ (pkg_files.json | selectattr('file_name','search','-javadoc\\.jar$') | list)[0] | default(None) }}"
+
+        - name: Fail if POM or main JAR missing
+          fail:
+            msg: "Missing required files for {{ pkg.name }} {{ pkg.version }} (need .pom and main .jar)"
+          when: pom_file is not defined or main_jar is not defined
+
+        - name: Build download URLs (GitLab package_files download)
+          # Official API lists files; download via package_files/:id download URL
+          set_fact:
+            download_urls:
+              pom: "{{ src_base }}/api/v4/projects/{{ src_project_id }}/packages/{{ pkg_id }}/package_files/{{ pom_file.id }}/download"
+              jar: "{{ src_base }}/api/v4/projects/{{ src_project_id }}/packages/{{ pkg_id }}/package_files/{{ main_jar.id }}/download"
+              sources: "{{ (sources_jar) | ternary(src_base ~ '/api/v4/projects/' ~ src_project_id ~ '/packages/' ~ pkg_id ~ '/package_files/' ~ sources_jar.id ~ '/download', omit) }}"
+              javadoc: "{{ (javadoc_jar) | ternary(src_base ~ '/api/v4/projects/' ~ src_project_id ~ '/packages/' ~ pkg_id ~ '/package_files/' ~ javadoc_jar.id ~ '/download', omit) }}"
+          # The package_files listing is documented; download endpoints are used by clients. :contentReference[oaicite:2]{index=2}
+
+        - name: Make local dir for {{ pkg.name }} {{ pkg.version }}
+          file:
+            path: "{{ workdir }}/{{ pkg.name }}/{{ pkg.version }}"
+            state: directory
+          register: pkg_dir
+
+        - name: Download POM
+          get_url:
+            url: "{{ download_urls.pom }}"
+            dest: "{{ pkg_dir.path }}/artifact.pom"
+            headers: { "PRIVATE-TOKEN": "{{ src_token }}" }
+
+        - name: Download main JAR
+          get_url:
+            url: "{{ download_urls.jar }}"
+            dest: "{{ pkg_dir.path }}/artifact.jar"
+            headers: { "PRIVATE-TOKEN": "{{ src_token }}" }
+
+        - name: Download sources (if any)
+          when: download_urls.sources is defined
+          get_url:
+            url: "{{ download_urls.sources }}"
+            dest: "{{ pkg_dir.path }}/artifact-sources.jar"
+            headers: { "PRIVATE-TOKEN": "{{ src_token }}" }
+
+        - name: Download javadoc (if any)
+          when: download_urls.jboss is defined
+          get_url:
+            url: "{{ download_urls.javadoc }}"
+            dest: "{{ pkg_dir.path }}/artifact-javadoc.jar"
+            headers: { "PRIVATE-TOKEN": "{{ src_token }}" }
+
+        - name: Deploy to TARGET GitLab Maven (main jar)
+          shell: >
+            mvn --batch-mode
+            deploy:deploy-file
+            -Durl="{{ tgt_repo_url }}"
+            -DrepositoryId="gitlab-target"
+            -Dfile="{{ pkg_dir.path }}/artifact.jar"
+            -DpomFile="{{ pkg_dir.path }}/artifact.pom"
+            -DgeneratePom=false
+            -DretryFailedDeploymentCount=2
+          environment:
+            MAVEN_OPTS: "-Dorg.slf4j.simpleLogger.showDateTime=true"
+          args:
+            chdir: "{{ pkg_dir.path }}"
+          register: deploy_main
+          changed_when: "'BUILD SUCCESS' in deploy_main.stdout or 'BUILD SUCCESS' in deploy_main.stderr"
+
+        - name: Deploy sources (optional)
+          when: download_urls.sources is defined
+          shell: >
+            mvn --batch-mode
+            deploy:deploy-file
+            -Durl="{{ tgt_repo_url }}"
+            -DrepositoryId="gitlab-target"
+            -Dfile="{{ pkg_dir.path }}/artifact
