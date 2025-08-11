@@ -1,0 +1,146 @@
+---
+- name: Configure GitLab Maven Virtual Registry and upstreams
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    gitlab_base: "https://gitlab.example.com"     # no trailing slash
+    group_id: 1234                                # top-level group ID
+    api_token: "{{ lookup('env','GITLAB_TOKEN') }}" # needs scope: api or read_virtual_registry
+
+    # Name of the virtual registry to create/manage
+    registry_name: "team-virtual-maven"
+
+    # Upstreams in desired order (first match wins)
+    # NOTE: Maven Central URL must be exactly https://repo1.maven.org/maven2 (no trailing slash)
+    upstreams:
+      - name: "internal-app"
+        url: "https://gitlab.example.com/api/v4/projects/5678/packages/maven"
+        username: "gitlab-ci-token"             # omit both username/password for anonymous upstreams
+        password: "{{ lookup('env','GITLAB_JOB_TOKEN') | default('', true) }}"
+        cache_validity_hours: 24                 # 0 = never recheck (central is forced to 0)
+      - name: "central"
+        url: "https://repo1.maven.org/maven2"
+        cache_validity_hours: 0
+
+  tasks:
+    - name: Ensure virtual registry exists (create if missing)
+      uri:
+        url: "{{ gitlab_base }}/api/v4/groups/{{ group_id }}/-/virtual_registries/packages/maven/registries"
+        method: POST
+        headers:
+          Private-Token: "{{ api_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ registry_name }}"
+        status_code: [201, 400]
+        return_content: true
+      register: create_registry
+
+    - name: Get list of registries to find ID
+      uri:
+        url: "{{ gitlab_base }}/api/v4/groups/{{ group_id }}/-/virtual_registries/packages/maven/registries"
+        method: GET
+        headers:
+          Private-Token: "{{ api_token }}"
+        status_code: 200
+        return_content: true
+      register: registries
+
+    - name: Set registry_id fact
+      set_fact:
+        registry_id: >-
+          {{ (registries.json | selectattr('name','equalto', registry_name) | list | first).id }}
+
+    - name: Fetch existing upstreams
+      uri:
+        url: "{{ gitlab_base }}/api/v4/virtual_registries/packages/maven/registries/{{ registry_id }}/upstreams"
+        method: GET
+        headers:
+          Private-Token: "{{ api_token }}"
+        status_code: 200
+        return_content: true
+      register: existing_upstreams
+
+    - name: Build map of existing upstreams by name
+      set_fact:
+        existing_map: "{{ dict((existing_upstreams.json | map(attribute='name') | list) | zip(existing_upstreams.json)) }}"
+
+    - name: Ensure each upstream exists/updated (post or put)
+      vars:
+        payload: >-
+          {{
+            {
+              'name': item.name,
+              'url': item.url,
+              'cache_validity_hours': (item.cache_validity_hours | default(24))
+            }
+            | combine( item.username is defined and item.username|length > 0
+                       and {'username': item.username} or {} )
+            | combine( item.password is defined and item.password|length > 0
+                       and {'password': item.password} or {} )
+          }}
+      block:
+        - name: Create upstream if missing
+          when: item.name not in existing_map
+          uri:
+            url: "{{ gitlab_base }}/api/v4/virtual_registries/packages/maven/registries/{{ registry_id }}/upstreams"
+            method: POST
+            headers:
+              Private-Token: "{{ api_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body: "{{ payload }}"
+            status_code: [201]
+          loop: "{{ upstreams }}"
+          loop_control: { label: "{{ item.name }}" }
+
+        - name: Update upstream if present (idempotent PUT/PATCH)
+          when: item.name in existing_map
+          uri:
+            url: "{{ gitlab_base }}/api/v4/virtual_registries/packages/maven/registries/{{ registry_id }}/upstreams/{{ existing_map[item.name].id }}"
+            method: PUT
+            headers:
+              Private-Token: "{{ api_token }}"
+              Content-Type: "application/json"
+            body_format: json
+            body: "{{ payload }}"
+            status_code: [200]
+          loop: "{{ upstreams }}"
+          loop_control: { label: "{{ item.name }}" }
+
+    # Keep upstream order exactly as declared above
+    # If your GitLab supports "position" updates, this PUT will reorder; otherwise it will be a no-op
+    - name: Reorder upstreams to desired order (best-effort)
+      uri:
+        url: "{{ gitlab_base }}/api/v4/virtual_registries/packages/maven/registries/{{ registry_id }}/upstreams/{{ (existing_upstreams_new.json | selectattr('name','equalto', item.name) | list | first).id }}"
+        method: PUT
+        headers:
+          Private-Token: "{{ api_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          position: "{{ idx + 1 }}"  # 1-based
+        status_code: [200, 400, 404]
+      loop: "{{ upstreams | enumerate }}"
+      loop_control:
+        label: "{{ item.1.name }}"
+        loop_var: item
+      vars:
+        idx: "{{ item.0 }}"
+      register: reorder_attempt
+      when: false  # flip to true if your instance advertises 'position' in the upstream object
+
+    - name: Refresh upstream list (for consumers/output)
+      uri:
+        url: "{{ gitlab_base }}/api/v4/virtual_registries/packages/maven/registries/{{ registry_id }}/upstreams"
+        method: GET
+        headers:
+          Private-Token: "{{ api_token }}"
+        status_code: 200
+      register: existing_upstreams_new
+
+    - name: Show final registry endpoint
+      debug:
+        msg: "Virtual registry URL: {{ gitlab_base }}/api/v4/virtual_registries/packages/maven/{{ registry_id }}"
