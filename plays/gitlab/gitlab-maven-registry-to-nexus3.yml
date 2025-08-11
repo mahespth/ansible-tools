@@ -1,0 +1,197 @@
+---
+- name: Mirror GitLab Maven via Nexus3
+  hosts: nexus_host
+  become: true
+  vars:
+    nexus_image: sonatype/nexus3:latest
+    nexus_data_dir: /opt/nexus-data
+    nexus_port: 8081
+
+    # GitLab Maven registry details
+    gitlab_maven_url: "https://gitlab.com/api/v4/projects/12345678/packages/maven"
+    gitlab_username: "gitlab-ci-token"   # or your GitLab username
+    gitlab_token: "{{ vault_gitlab_token }}"
+
+    # Nexus repo names
+    nexus_repo_gitlab_proxy: "gitlab-maven-proxy"
+    nexus_repo_group: "maven-all"        # optional group
+
+  tasks:
+    - name: Ensure nexus data dir exists
+      file:
+        path: "{{ nexus_data_dir }}"
+        state: directory
+        owner: 200
+        group: 200
+        mode: "0755"
+
+    - name: Run Nexus3 (Docker)
+      community.docker.docker_container:
+        name: nexus3
+        image: "{{ nexus_image }}"
+        restart_policy: always
+        published_ports:
+          - "{{ nexus_port }}:8081"
+        env:
+          INSTALL4J_ADD_VM_PARAMS: "-Xms1g -Xmx1g -XX:MaxDirectMemorySize=1g"
+        volumes:
+          - "{{ nexus_data_dir }}:/nexus-data"
+      register: nexus_container
+
+    - name: Wait for Nexus UI to be up
+      uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/status"
+        status_code: 200
+        return_content: yes
+      register: nexus_status
+      retries: 60
+      delay: 5
+      until: nexus_status.status == 200
+
+    - name: Get initial admin password
+      slurp:
+        src: "{{ nexus_data_dir }}/admin.password"
+      register: admin_pw_file
+      failed_when: false
+
+    - name: Set admin password fact
+      set_fact:
+        nexus_admin_password: "{{ (admin_pw_file.content | b64decode) | default('admin123', true) | trim }}"
+
+    # You can keep default admin/admin123 in labs; in prod, set a proper password and token.
+    - name: Create admin API token (or reuse if you already have)
+      uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/users/admin/change-password"
+        method: PUT
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: yes
+        status_code: [204, 401]
+        headers:
+          Content-Type: "text/plain"
+        body: "{{ nexus_admin_password }}"
+      register: pw_change
+      failed_when: false
+
+    - name: Create a Maven proxy to GitLab (idempotent)
+      uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/proxy"
+        method: POST
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: yes
+        status_code: [201, 400]
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ nexus_repo_gitlab_proxy }}"
+          online: true
+          storage:
+            blobStoreName: "default"
+            strictContentTypeValidation: true
+          cleanup:
+            policyNames: []
+          proxy:
+            remoteUrl: "{{ gitlab_maven_url }}"
+            contentMaxAge: 1440
+            metadataMaxAge: 1440
+          negativeCache:
+            enabled: true
+            timeToLive: 1440
+          httpClient:
+            blocked: false
+            autoBlock: true
+            authentication:
+              type: "username"
+              username: "{{ gitlab_username }}"
+              password: "{{ gitlab_token }}"
+          maven:
+            versionPolicy: "RELEASE"
+            layoutPolicy: "STRICT"
+      register: create_proxy
+      failed_when: create_proxy.status not in [201, 400]
+
+    - name: Ensure proxy exists (update if already present)
+      uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/proxy/{{ nexus_repo_gitlab_proxy }}"
+        method: PUT
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: yes
+        status_code: [200, 404]
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ nexus_repo_gitlab_proxy }}"
+          online: true
+          storage:
+            blobStoreName: "default"
+            strictContentTypeValidation: true
+          proxy:
+            remoteUrl: "{{ gitlab_maven_url }}"
+            contentMaxAge: 1440
+            metadataMaxAge: 1440
+          negativeCache:
+            enabled: true
+            timeToLive: 1440
+          httpClient:
+            blocked: false
+            autoBlock: true
+            authentication:
+              type: "username"
+              username: "{{ gitlab_username }}"
+              password: "{{ gitlab_token }}"
+          maven:
+            versionPolicy: "RELEASE"
+            layoutPolicy: "STRICT"
+      when: create_proxy.status == 400  # already exists
+
+    # Optional: a maven-group that can include multiple repos.
+    # If you want ONLY GitLab mirrored, skip the group and point clients straight at gitlab-maven-proxy.
+    - name: Create/Update Maven group (optional)
+      uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/group"
+        method: POST
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: yes
+        status_code: [201, 400]
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ nexus_repo_group }}"
+          online: true
+          storage:
+            blobStoreName: "default"
+            strictContentTypeValidation: true
+          group:
+            memberNames:
+              - "{{ nexus_repo_gitlab_proxy }}"
+              # add "maven-central" here if you want fallback to Central
+      register: create_group
+      failed_when: create_group.status not in [201, 400]
+
+    - name: Update group if it exists (optional)
+      uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/group/{{ nexus_repo_group }}"
+        method: PUT
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: yes
+        status_code: [200, 404]
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ nexus_repo_group }}"
+          online: true
+          storage:
+            blobStoreName: "default"
+            strictContentTypeValidation: true
+          group:
+            memberNames:
+              - "{{ nexus_repo_gitlab_proxy }}"
+      when: create_group.status == 400
