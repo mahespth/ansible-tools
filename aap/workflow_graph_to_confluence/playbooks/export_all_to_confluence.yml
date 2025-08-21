@@ -35,8 +35,8 @@
         url: "{{ awx_host }}/api/v2/workflow_job_templates/?page_size={{ awx_page_size }}"
         headers:
           Authorization: "Bearer {{ awx_oauthtoken }}"
-        return_content: yes
-        validate_certs: no
+        return_content: true
+        validate_certs: false
       register: wjt_first
 
     - name: Calculate total pages & seed results list

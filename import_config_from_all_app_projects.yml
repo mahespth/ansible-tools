@@ -1,0 +1,89 @@
+---
+
+# This playbook extracts job templates from all Ansible projects in the AAP Controller
+# and creates job templates based on the extracted data.
+
+
+- name: Find all Ansible projects in AAP Controller and extract templates.yml
+  hosts: localhost
+  gather_facts: false
+
+  collections:
+    - ansible.controller
+
+  vars:
+    templates_file: "job_templates.yml"
+
+    tasks:
+      - name: Create a temporary output directory
+        tempfile:
+          state: directory
+          prefix: extracted_templates_
+        register: temp_output_dir
+
+      - name: Get all projects from AAP Controller
+        ansible.controller.project_info:
+        register: projects_info
+
+      - name: Download templates.yml from each project
+        vars:
+          project_name: "{{ item.name }}"
+          project_scm_url: "{{ item.scm_url }}"
+        block:
+          - name: Clone project repo locally
+            - name: Clone project repo locally
+            git:
+              repo: "{{ project_scm_url }}"
+              dest: "/tmp/{{ project_name }}"
+              version: "{{ item.scm_branch | default('main') }}"
+            when: project_scm_url is defined
+
+            - name: Check if templates.yml exists in project
+            stat:
+              path: "/tmp/{{ project_name }}/{{ templates_file }}"
+            register: template_stat
+
+            - name: Copy templates.yml to output directory
+            copy:
+              src: "/tmp/{{ project_name }}/{{ templates_file }}"
+              dest: "{{ temp_output_dir.path }}/{{ project_name }}_templates.yml"
+            when: template_stat.stat.exists
+
+          - name: Find all copied templates.yml files
+          find:
+            paths: "{{ temp_output_dir.path }}"
+            patterns: "*_templates.yml"
+          register: found_templates
+
+          - name: Create job templates from extracted data
+          block:
+            - name: Load templates.yml data
+            include_vars:
+              file: "{{ item.path }}"
+              name: template_data
+            loop: "{{ found_templates.files }}"
+            loop_control:
+              loop_var: item
+
+            - name: Create job templates
+            ansible.controller.job_template:
+              name: "{{ job_template.name }}"
+              job_type: "{{ job_template.job_type | default(omit) }}"
+              inventory: "{{ job_template.inventory | default(omit) }}"
+              project: "{{ job_template.project | default(omit) }}"
+              playbook: "{{ job_template.playbook | default(omit) }}"
+              credential: "{{ job_template.credential | default(omit) }}"
+              extra_vars: "{{ job_template.extra_vars | default(omit) }}"
+              limit: "{{ job_template.limit | default(omit) }}"
+              verbosity: "{{ job_template.verbosity | default(omit) }}"
+              scm_branch: "{{ job_template.scm_branch | default(omit) }}"
+              ask_variables_on_launch: "{{ job_template.ask_variables_on_launch | default(omit) }}"
+              ask_limit_on_launch: "{{ job_template.ask_limit_on_launch | default(omit) }}"
+              ask_tags_on_launch: "{{ job_template.ask_tags_on_launch | default(omit) }}"
+              ask_skip_tags_on_launch: "{{ job_template.ask_skip_tags_on_launch | default(omit) }}"
+              ask_inventory_on_launch: "{{ job_template.ask_inventory_on_launch | default(omit) }}"
+              ask_credential_on_launch: "{{ job_template.ask_credential_on_launch | default(omit) }}"
+              ask_scm_branch_on_launch: "{{ job_template.ask_scm_branch_on_launch | default(omit) }}"
+            loop: "{{ template_data.job_templates }}"
+            loop_control:
+              loop_var: job_template
