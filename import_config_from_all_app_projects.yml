@@ -16,7 +16,7 @@
 
     tasks:
       - name: Create a temporary output directory
-        tempfile:
+        ansible.builtin.tempfile:
           state: directory
           prefix: extracted_templates_
         register: temp_output_dir
@@ -30,42 +30,42 @@
           project_name: "{{ item.name }}"
           project_scm_url: "{{ item.scm_url }}"
         block:
+        
           - name: Clone project repo locally
-            - name: Clone project repo locally
-            git:
+            ansible.builtin.git:
               repo: "{{ project_scm_url }}"
               dest: "/tmp/{{ project_name }}"
               version: "{{ item.scm_branch | default('main') }}"
             when: project_scm_url is defined
 
-            - name: Check if templates.yml exists in project
+          - name: Check if templates.yml exists in project
             stat:
               path: "/tmp/{{ project_name }}/{{ templates_file }}"
             register: template_stat
 
-            - name: Copy templates.yml to output directory
-            copy:
+          - name: Copy templates.yml to output directory
+            ansible.builtin.copy:
               src: "/tmp/{{ project_name }}/{{ templates_file }}"
               dest: "{{ temp_output_dir.path }}/{{ project_name }}_templates.yml"
             when: template_stat.stat.exists
 
-          - name: Find all copied templates.yml files
-          find:
-            paths: "{{ temp_output_dir.path }}"
-            patterns: "*_templates.yml"
-          register: found_templates
+      - name: Find all copied templates.yml files
+        ansible.builtin.find:
+          paths: "{{ temp_output_dir.path }}"
+          patterns: "*_templates.yml"
+        register: found_templates
 
-          - name: Create job templates from extracted data
-          block:
-            - name: Load templates.yml data
-            include_vars:
+      - name: Create job templates from extracted data
+        block:
+          - name: Load templates.yml data
+            ansible.builtin.include_vars:
               file: "{{ item.path }}"
               name: template_data
             loop: "{{ found_templates.files }}"
             loop_control:
               loop_var: item
 
-            - name: Create job templates
+          - name: Create job templates
             ansible.controller.job_template:
               name: "{{ job_template.name }}"
               job_type: "{{ job_template.job_type | default(omit) }}"
@@ -87,3 +87,8 @@
             loop: "{{ template_data.job_templates }}"
             loop_control:
               loop_var: job_template
+
+      - name: Clean up temporary output directory
+        ansible.builtin.file:
+          path: "{{ temp_output_dir.path }}"
+          state: absent
