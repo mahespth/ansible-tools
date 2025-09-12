@@ -117,3 +117,17 @@ registry.redhat.io/ansible-automation-platform-22/ee-supported-rhel8:latest
 
 https://www.ansible.com/blog/deep-dive-on-ansible-vscode-extension/
 
+https://docs.ansible.com/ansible/latest/reference_appendices/playbooks_keywords.html
+https://docs.ansible.com/ansible/latest/reference_appendices/general_precedence.html#general-precedence-rules
+
+https://docs.ansible.com/ansible/latest/playbook_guide/
+
+https://handbook.gitlab.com/docs/markdown-guide/
+
+https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.4/html/automation_controller_user_guide/
+
+https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.5/
+
+
+## Red Hat Communities of Practice
+https://github.com/redhat-cop/
