@@ -102,6 +102,8 @@ redhat.vscode-yaml-1.18.0
 ansible-navigator settings --sample >ansible-navigator.yml
 ```
 
+# Executing from vscode using ansible-navigator
+
 # 
 The ansible core install will contain a default set of collections installed into someting like your ~/local/lib/python.../site-packages/ansible-collections, if you do not wish to use those collections you can set the following via your ansible configuration or shell environment. If you set this and run the ansible-galaxy collections list command then you have no other collections install you should see no output.
 
