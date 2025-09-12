@@ -15,7 +15,9 @@ https://www.ansible.com/blog/deep-dive-on-ansible-vscode-extension/
 
 # Configure Redhat Plugin
 
-# Install PODMAN into host
+# Install Configure WSL if using windows.
+
+# Install PODMAN for remote dev
 
 # Configure UID/GID if reuired
 
