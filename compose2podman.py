@@ -11,7 +11,8 @@ Description:
     - Environment variables (inline + env_file merged like Docker Compose)
     - Writes merged env into a temp file for Podman
 
-License: MIT (or your preferred license)
+License: MIT
+
 """
 
 import argparse
