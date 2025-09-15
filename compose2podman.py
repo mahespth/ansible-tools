@@ -7,6 +7,9 @@ Description:
     Convert a service definition from a Docker Compose YAML file into
     an equivalent `podman run` command. This allows you to run containers
     without a compose stack, but with the same important options.
+    - Ports, volumes, restart policy, working dir, user, entrypoint
+    - Environment variables (inline + env_file merged like Docker Compose)
+    - Writes merged env into a temp file for Podman
 
 License: MIT (or your preferred license)
 """
@@ -15,6 +18,59 @@ import argparse
 import yaml
 import shlex
 import sys
+import tempfile
+
+
+def load_env_files(env_files):
+    """Load and merge multiple env files into a dictionary."""
+    env_dict = {}
+    for env_file in env_files:
+        try:
+            with open(env_file, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    env_dict[key.strip()] = val.strip()
+        except FileNotFoundError:
+            raise ValueError(f"Env file not found: {env_file}")
+    return env_dict
+
+
+def handle_environment(service_def, cmd):
+    """
+    Merge env_file + environment like Docker Compose,
+    then write them to a temp file and append --env-file.
+    """
+    merged_env = {}
+
+    # Merge env files in order
+    env_files = service_def.get("env_file", [])
+    if isinstance(env_files, str):
+        env_files = [env_files]
+    if env_files:
+        merged_env.update(load_env_files(env_files))
+
+    # Inline environment overrides
+    env = service_def.get("environment", {})
+    if isinstance(env, dict):
+        merged_env.update(env)
+    elif isinstance(env, list):
+        for e in env:
+            if "=" in e:
+                k, v = e.split("=", 1)
+                merged_env[k] = v
+
+    # Write merged env to a temp file
+    if merged_env:
+        tmp = tempfile.NamedTemporaryFile(delete=False, mode="w")
+        for k, v in merged_env.items():
+            tmp.write(f"{k}={v}\n")
+        tmp.close()
+        cmd.extend(["--env-file", tmp.name])
 
 
 def compose_to_podman(compose_file, service=None):
@@ -58,14 +114,8 @@ def compose_to_podman(compose_file, service=None):
     for port in service_def.get("ports", []):
         cmd.extend(["-p", port])
 
-    # Environment variables
-    env = service_def.get("environment", {})
-    if isinstance(env, dict):
-        for k, v in env.items():
-            cmd.extend(["-e", f"{k}={v}"])
-    elif isinstance(env, list):
-        for e in env:
-            cmd.extend(["-e", e])
+    # Environment handling (env_file + environment merged)
+    handle_environment(service_def, cmd)
 
     # Volumes
     for volume in service_def.get("volumes", []):
