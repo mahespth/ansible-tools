@@ -2,7 +2,7 @@
 """
 compose2podman.py
 
-Author: Steve (DevOps Engineer)
+Author: Steve Maher (DevOps Engineer)
 Description:
     Convert a service definition from a Docker Compose YAML file into
     an equivalent `podman run` command. This allows you to run containers
