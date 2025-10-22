@@ -1,0 +1,73 @@
+---
+
+- name: Precreate homes and authorized_keys for LDAP users
+  hosts: linux_hosts
+  become: true
+  vars:
+    ldap_users:
+      - name: jdoe
+        keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... jdoe@laptop"
+      - name: asmith
+        keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAJ... asmith@work"
+
+  tasks:
+    - name: Get NSS passwd entries for each user
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ item.name }}"
+      loop: "{{ ldap_users }}"
+      register: passwd_entries
+
+    - name: Build user facts
+      ansible.builtin.set_fact:
+        users_expanded: >-
+          {{
+            passwd_entries.results
+            | map(
+                'combine',
+                {
+                  'name': item.item.name,
+                  'keys': (ldap_users | selectattr('name','equalto', item.item.name) | first).keys
+                }
+              )
+            | list
+          }}
+
+    - name: Ensure home directory exists with correct owner/mode
+      ansible.builtin.file:
+        path: "{{ item.ansible_facts.getent_passwd[item.item.name][4] }}"
+        owner: "{{ item.ansible_facts.getent_passwd[item.item.name][1] | int }}"
+        group: "{{ item.ansible_facts.getent_passwd[item.item.name][2] | int }}"
+        mode: "0700"
+        state: directory
+      loop: "{{ passwd_entries.results }}"
+
+    - name: Ensure .ssh exists
+      ansible.builtin.file:
+        path: "{{ item.ansible_facts.getent_passwd[item.item.name][4] }}/.ssh"
+        owner: "{{ item.ansible_facts.getent_passwd[item.item.name][1] | int }}"
+        group: "{{ item.ansible_facts.getent_passwd[item.item.name][2] | int }}"
+        mode: "0700"
+        state: directory
+      loop: "{{ passwd_entries.results }}"
+
+    - name: Write authorized_keys
+      ansible.builtin.copy:
+        dest: "{{ item.ansible_facts.getent_passwd[item.item.name][4] }}/.ssh/authorized_keys"
+        content: "{{ (ldap_users | selectattr('name','equalto', item.item.name) | first).keys | join('\n') ~ '\n' }}"
+        owner: "{{ item.ansible_facts.getent_passwd[item.item.name][1] | int }}"
+        group: "{{ item.ansible_facts.getent_passwd[item.item.name][2] | int }}"
+        mode: "0600"
+      loop: "{{ passwd_entries.results }}"
+
+    - name: Restore SELinux contexts (if available)
+      ansible.builtin.command: "restorecon -Rv {{ item.ansible_facts.getent_passwd[item.item.name][4] }}"
+      args:
+        warn: false
+      changed_when: false
+      failed_when: false
+      loop: "{{ passwd_entries.results }}"
+
+...
