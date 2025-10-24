@@ -51,6 +51,11 @@ redis-cli -s /run/redis/redis.sock --latency
 redis-cli -s /run/redis/redis.sock MONITOR
 ```
 
+
+```bash
+awx-manage print_settings | egrep -i 'REDIS|BROKER_URL|CHANNEL|CACHE'
+```
+
 Redhat suggested this could be due to stuck jobs, however I didnt see that.
 
 ```bash
