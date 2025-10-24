@@ -5,25 +5,16 @@ sssd_dns_probe_nopip.py — Looping DNS probe for AD DC SRV records using only s
 
 It prefers `dig`, then `host`, then `resolvectl`, then `nslookup`.
 Works in air-gapped environments as long as one of those tools is installed.
-
-Examples:
-  python3 sssd_dns_probe_nopip.py --domain example.corp --interval 5
-  python3 sssd_dns_probe_nopip.py --domain example.corp --nameserver 10.0.0.10 --nameserver 10.0.0.11 --tcp-fallback --dump-addrs
-  python3 sssd_dns_probe_nopip.py --domain example.corp --once --log /var/log/sssd_dns_probe.log
-
-Exit codes with --once: 0 success, 2 failure.
 """
 
 import argparse
 import logging
 from logging.handlers import RotatingFileHandler
-import os
 import shutil
 import socket
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from typing import List, Tuple, Optional
 
 
@@ -48,7 +39,6 @@ def run(cmd: List[str], timeout: float) -> Tuple[int, str, str]:
 
 
 def parse_srv_from_dig_short(text: str) -> List[Tuple[str, int, int, int]]:
-    # lines like: "0 100 389 dc1.example.corp."
     out = []
     for line in text.splitlines():
         parts = line.strip().split()
@@ -73,20 +63,16 @@ def query_srv_with_dig(qname: str, ns: Optional[str], timeout: float, tcp: bool)
     if rc != 0:
         raise RuntimeError(f"dig rc={rc} err={err.strip()}")
     recs = parse_srv_from_dig_short(out)
-    if not recs:
-        # try full output parse fallback (rarely needed)
-        recs = []
     return recs
 
 
 def parse_srv_from_host(text: str) -> List[Tuple[str, int, int, int]]:
-    # lines like: "_ldap._tcp.dc._msdcs.example.corp has SRV record 0 100 389 dc1.example.corp."
     out = []
     for line in text.splitlines():
         line = line.strip()
         if " has SRV record " in line:
             try:
-                left, right = line.split(" has SRV record ", 1)
+                _, right = line.split(" has SRV record ", 1)
                 parts = right.split()
                 if len(parts) >= 4:
                     prio = int(parts[0]); weight = int(parts[1]); port = int(parts[2]); target = parts[3].rstrip(".")
@@ -99,16 +85,14 @@ def parse_srv_from_host(text: str) -> List[Tuple[str, int, int, int]]:
 def query_srv_with_host(qname: str, ns: Optional[str], timeout: float) -> List[Tuple[str, int, int, int]]:
     cmd = ["host", "-t", "SRV", qname]
     if ns:
-        cmd.append(ns)  # host allows "host name server"
+        cmd.append(ns)
     rc, out, err = run(cmd, timeout=timeout+1.0)
     if rc != 0:
         raise RuntimeError(f"host rc={rc} err={err.strip()}")
-    recs = parse_srv_from_host(out)
-    return recs
+    return parse_srv_from_host(out)
 
 
 def parse_srv_from_resolvectl(text: str) -> List[Tuple[str, int, int, int]]:
-    # Example lines: "SRV 0 100 389 dc1.example.corp."
     out = []
     for line in text.splitlines():
         line = line.strip()
@@ -131,18 +115,16 @@ def query_srv_with_resolvectl(qname: str, ns: Optional[str], timeout: float, too
     rc, out, err = run(cmd, timeout=timeout+1.0)
     if rc != 0:
         raise RuntimeError(f"{base} rc={rc} err={err.strip()}")
-    recs = parse_srv_from_resolvectl(out)
-    return recs
+    return parse_srv_from_resolvectl(out)
 
 
 def parse_srv_from_nslookup(text: str) -> List[Tuple[str, int, int, int]]:
-    # nslookup output varies; look for lines like: "priority = 0, weight = 100, port = 389, target = dc1.example.corp"
     out = []
     for line in text.splitlines():
         line = line.strip()
         if ("priority" in line and "weight" in line and "port" in line):
             try:
-                # crude parse that works across common nslookup variants
+                # tolerant parse
                 prio = int(line.split("priority")[1].split("=")[1].split(",")[0])
                 weight = int(line.split("weight")[1].split("=")[1].split(",")[0])
                 port = int(line.split("port")[1].split("=")[1].split(",")[0])
@@ -160,8 +142,7 @@ def query_srv_with_nslookup(qname: str, ns: Optional[str], timeout: float) -> Li
     rc, out, err = run(cmd, timeout=timeout+1.0)
     if rc != 0:
         raise RuntimeError(f"nslookup rc={rc} err={err.strip()}")
-    recs = parse_srv_from_nslookup(out)
-    return recs
+    return parse_srv_from_nslookup(out)
 
 
 def query_a_aaaa_with_dig(name: str, ns: Optional[str], timeout: float) -> Tuple[List[str], List[str]]:
@@ -192,7 +173,6 @@ def query_a_aaaa_system(name: str) -> Tuple[List[str], List[str]]:
             aaaa.append(res[4][0])
     except Exception:
         pass
-    # dedupe
     a = sorted(list(dict.fromkeys(a)))
     aaaa = sorted(list(dict.fromkeys(aaaa)))
     return a, aaaa
@@ -217,15 +197,15 @@ def setup_logger(path: str, verbose: bool) -> logging.Logger:
 def main():
     p = argparse.ArgumentParser(description="Looping DNS probe for AD DC SRV records (no external deps)")
     p.add_argument("--domain", required=True, help="AD domain (e.g., example.corp)")
-    p.add_argument("--nameserver", action="append", default=[], help="DNS server IP to query (repeatable). If omitted, system resolver is used.")
-    p.add_argument("--interval", type=int, default=10, help="Seconds between probes (default: 10)")
-    p.add_argument("--timeout", type=float, default=2.0, help="Per-try timeout seconds (default: 2.0)")
-    p.add_argument("--retries", type=int, default=2, help="Retries per probe (default: 2)")
-    p.add_argument("--tcp-fallback", action="store_true", help="With dig present, retry SRV over TCP if UDP attempts fail")
-    p.add_argument("--log", default="", help="Optional log file path (also logs to stdout)")
-    p.add_argument("--once", action="store_true", help="Run one probe and exit")
-    p.add_argument("--dump-addrs", action="store_true", help="Also resolve A/AAAA for SRV targets and log them")
-    p.add_argument("--tag", default="", help="Optional tag to include in logs (e.g., site/hostname)")
+    p.add_argument("--nameserver", action="append", default=[], help="DNS server IP(s). If omitted, use system resolver.")
+    p.add_argument("--interval", type=int, default=10, help="Seconds between probes")
+    p.add_argument("--timeout", type=float, default=2.0, help="Per-try timeout seconds")
+    p.add_argument("--retries", type=int, default=2, help="Retries per probe")
+    p.add_argument("--tcp-fallback", action="store_true", help="If dig is available, retry SRV over TCP on failures")
+    p.add_argument("--log", default="", help="Optional log file path")
+    p.add_argument("--once", action="store_true", help="Run one probe and exit (0=ok, 2=fail)")
+    p.add_argument("--dump-addrs", dest="dump_addrs", action="store_true", help="Also resolve A/AAAA for SRV targets")
+    p.add_argument("--tag", default="", help="Optional tag to include in logs")
     args = p.parse_args()
 
     log = setup_logger(args.log, verbose=True)
@@ -233,7 +213,7 @@ def main():
 
     tool = find_tool()
     if not tool:
-        log.error("No resolver tool found. Install one of: dig (bind-utils), host, resolvectl/systemd-resolve, or nslookup.")
+        log.error("No resolver tool found. Install one of: dig, host, resolvectl/systemd-resolve, nslookup.")
         sys.exit(2)
     log.info(f"Using resolver tool: {tool}")
 
@@ -253,7 +233,6 @@ def main():
         if tool == "dig":
             return query_a_aaaa_with_dig(name, ns, args.timeout)
         else:
-            # fallback to system resolver
             return query_a_aaaa_system(name)
 
     log.info(f"Starting SRV probe for {qname} interval={args.interval}s retries={args.retries} nameservers={args.nameserver or 'system'} tcp_fallback={args.tcp_fallback}")
@@ -261,10 +240,9 @@ def main():
         log.info(f"Tag: {args.tag}")
 
     def probe_once() -> bool:
-        servers = args.nameserver or [None]  # None => system
+        servers = args.nameserver or [None]
         last_err = None
         for ns in servers:
-            # UDP/default attempts
             for i in range(1, args.retries + 1):
                 start = time.perf_counter()
                 try:
@@ -275,7 +253,7 @@ def main():
                     log.info(f"SRV OK via {ns or 'system'} in {elapsed_ms}ms: {len(recs)} record(s)")
                     for t, port, prio, weight in sorted(recs, key=lambda x: (x[2], -x[3], x[0])):
                         log.debug(f"  target={t} port={port} priority={prio} weight={weight}")
-                        if args.dump-addrs:
+                        if args.dump_addrs:
                             a, aaaa = query_addrs(t, ns)
                             if a:
                                 log.debug(f"    A: {', '.join(a)}")
@@ -285,7 +263,6 @@ def main():
                 except Exception as e:
                     last_err = str(e)
                     log.warning(f"Attempt {i}/{args.retries} failed via {ns or 'system'}: {e}")
-            # Optional TCP fallback
             if args.tcp_fallback and tool == "dig":
                 for i in range(1, max(1, args.retries) + 1):
                     try:
@@ -296,7 +273,7 @@ def main():
                         log.info(f"SRV OK via {ns or 'system'} over TCP in {elapsed_ms}ms: {len(recs)} record(s)")
                         for t, port, prio, weight in sorted(recs, key=lambda x: (x[2], -x[3], x[0])):
                             log.debug(f"  target={t} port={port} priority={prio} weight={weight}")
-                            if args.dump-addrs:
+                            if args.dump_addrs:
                                 a, aaaa = query_addrs(t, ns)
                                 if a:
                                     log.debug(f"    A: {', '.join(a)}")
@@ -321,5 +298,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
