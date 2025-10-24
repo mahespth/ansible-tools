@@ -50,3 +50,11 @@ redis-cli -s /run/redis/redis.sock --latency
 ```bash
 redis-cli -s /run/redis/redis.sock MONITOR
 ```
+
+Redhat suggested this could be due to stuck jobs, however I didnt see that.
+
+```bash
+awx-manage shell_plus
+>>> UnifiedJob.objects.filter(status='pending')
+>>> UnifiedJob.objects.filter(status='pending').update(status='canceled')
+```
