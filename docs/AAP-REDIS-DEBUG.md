@@ -37,4 +37,16 @@ set -e
 '
 ```
 
-    
+
+# Check latency
+
+```bash
+redis-cli -s /run/redis/redis.sock --latency
+```
+
+
+# Monitor
+
+```bash
+redis-cli -s /run/redis/redis.sock MONITOR
+```
