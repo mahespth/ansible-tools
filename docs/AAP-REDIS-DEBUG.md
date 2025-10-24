@@ -21,13 +21,13 @@ status of services:
 ansible all -b -m shell -a '
 set -e
 {
-  cmd="redic-cli -s /run/redis/redis.sock"
+  cmd="redis-cli -s /run/redis/redis.sock"
   echo "=== $(hostname) ==="
   $cmd PING
   $cmd INFO all
   $cmd CONFIG GET \*
   $cmd LATENCY DOCTOR
-  echo "SLOWLOG LEN:" $( $cmd redis-cli SLOWLOG LEN )
+  echo "SLOWLOG LEN:" $( $cmd SLOWLOG LEN )
   $cmd SLOWLOG GET 25
   $cmd CLIENT LIST
   $cmd MEMORY STATS
