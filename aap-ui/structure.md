@@ -1,3 +1,4 @@
+```shell
 aap_tui/
 ├── pyproject.toml
 ├── src/
@@ -30,3 +31,4 @@ aap_tui/
 └── tests/
     ├── test_api_client.py
     └── test_log_follow.py
+```
