@@ -122,7 +122,7 @@ def fetch_status(base_url, token, timeout=5, insecure=False, use_ping=False):
     """
     base_url = base_url.rstrip("/")
     if use_ping:
-        url = f"{base_url}/ping"
+        url = f"{base_url}/ping/"
     else:
         url = f"{base_url}/api/gateway/v1/status/"
 
