@@ -25,7 +25,7 @@ It:
     - How long they have been running / ran for
 - Keeps recent jobs on screen even after they finish; their colour/status
   changes as they complete. Failed jobs are shown in red.
-- Jobs are displayed from newest to oldest.
+- Jobs are displayed from newest to oldest by job ID.
 - Uses only Python standard library modules (suitable for typical AAP installs).
 
 Assumed API Endpoints (AAP 2.5)
@@ -522,12 +522,12 @@ def run_dashboard(
                     row += 1
 
                 # ------------------------------------------------------------------
-                # Recent jobs section (last N by start time, newest first)
+                # Recent jobs section (last N by job ID, newest first)
                 # ------------------------------------------------------------------
                 if row < h:
                     stdscr.addstr(
                         row, 0,
-                        f"Recent jobs (last {min(page_size, MAX_JOBS_DISPLAY)} shown, newest first):",
+                        f"Recent jobs (last {min(page_size, MAX_JOBS_DISPLAY)} shown, newest first by ID):",
                         curses.color_pair(5),
                     )
                     row += 1
@@ -537,10 +537,12 @@ def run_dashboard(
                     stdscr.addstr(row, 0, header_line[:w - 1], curses.color_pair(5))
                     row += 1
 
-                # Sort jobs by started DESC so newest are first
+                # Sort jobs by integer ID descending so newest IDs are first
                 def job_sort_key(j):
-                    # Use started if available; else fall back to created; else empty string
-                    return j.get("started") or j.get("created") or ""
+                    try:
+                        return int(j.get("id", 0))
+                    except Exception:
+                        return 0
 
                 jobs_sorted = sorted(jobs, key=job_sort_key, reverse=True)
 
