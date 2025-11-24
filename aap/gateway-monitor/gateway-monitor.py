@@ -51,7 +51,7 @@ Usage
         https://gw3.example.com \\
         https://gw4.example.com
 
-    # Use /ping instead of /api/gateway/v1/status/
+    # Use /api/gateway/v1/ping instead of /api/gateway/v1/status/
     ./aap_gateway_monitor.py \\
         --token 'YOUR_BEARER_TOKEN' \\
         --ping \\
@@ -122,7 +122,7 @@ def fetch_status(base_url, token, timeout=5, insecure=False, use_ping=False):
     """
     base_url = base_url.rstrip("/")
     if use_ping:
-        url = f"{base_url}/ping/"
+        url = f"{base_url}/api/gateway/v1/ping/"
     else:
         url = f"{base_url}/api/gateway/v1/status/"
 
