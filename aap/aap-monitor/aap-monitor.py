@@ -24,7 +24,10 @@ It:
     - User who launched them
     - How long they have been running / ran for
 - Keeps recent jobs on screen even after they finish; their colour/status
-  changes as they complete. Failed jobs are shown in red.
+  changes as they complete:
+    - Running jobs: highlighted with reverse video.
+    - Successful/completed jobs: dimmed grey.
+    - Failed/error jobs: red.
 - Jobs are displayed from newest to oldest by job ID.
 - Uses only Python standard library modules (suitable for typical AAP installs).
 
@@ -59,9 +62,11 @@ Instances:
 - BAD    (red)     -> disabled, or a fatal-looking "errors" field
 - UNKNOWN (cyan)   -> anything else / unexpected data
 
-Jobs (row colour):
-- GOOD   (green)   -> status in {running, successful, finished, completed}
+Jobs:
+- GOOD   (green)   -> generic good state
 - BAD    (red)     -> any status containing "fail" or "error"
+- Running jobs: GOOD colour + reverse video (highlighted).
+- Successful/completed: dim grey (white + DIM).
 - WARN / UNKNOWN   -> available if you extend mappings.
 
 Usage
@@ -340,7 +345,7 @@ def run_dashboard(
     curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # warn
     curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)     # bad
     curses.init_pair(4, curses.COLOR_CYAN, curses.COLOR_BLACK)    # unknown/info
-    curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLACK)   # text
+    curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLACK)   # text / grey-ish
 
     color_for_class = {
         "good": curses.color_pair(1),
@@ -553,6 +558,7 @@ def run_dashboard(
                     jid = job.get("id")
                     status = job.get("status") or "?"
                     status_str = str(status)
+                    status_lower = status_str.lower()
                     elapsed = job.get("elapsed")
 
                     # For running jobs, elapsed may be 0; compute from started if needed
@@ -577,12 +583,26 @@ def run_dashboard(
                     name = str(job.get("name") or job.get("job_template", ""))
 
                     cls = classify_status_text(status_str)
+                    base_style = color_for_class.get(cls, curses.color_pair(5))
+
+                    # Style tweaks:
+                    # - Running: reverse video highlight
+                    # - Successful/completed: dim grey (white + DIM)
+                    # - Failed/error: red (cls == 'bad')
+                    if status_lower == "running":
+                        style = color_for_class["good"] | curses.A_REVERSE
+                    elif status_lower in ("successful", "completed", "finished"):
+                        style = curses.color_pair(5) | curses.A_DIM
+                    elif cls == "bad":
+                        style = color_for_class["bad"]
+                    else:
+                        style = base_style
 
                     line = f"  {jid:4}  {elapsed_str:9}  {user:12.12}  {status_str:7}  {name}"
                     stdscr.addstr(
                         row, 0,
                         line[:w - 1],
-                        color_for_class.get(cls, curses.color_pair(5)),
+                        style,
                     )
                     row += 1
 
