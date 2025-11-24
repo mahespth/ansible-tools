@@ -16,6 +16,8 @@ It:
 - Classifies status into: GOOD / WARN / BAD / UNKNOWN.
 - Displays a scrolling, colored graph of recent status for each endpoint.
 - Tracks and displays the % of requests that are NOT GOOD, ignoring UNKNOWN.
+- Tracks how many times each distinct error has occurred and shows an
+  "Errors seen this session" section under the hosts.
 - Uses only the Python standard library (suitable for typical AAP installs).
 - Can optionally fetch all endpoints concurrently using threads.
 - By default shows a truncated hostname:
@@ -50,6 +52,16 @@ For each endpoint, the monitor keeps running stats:
 - It counts only samples that are not UNKNOWN.
 - % non-good = (WARN + BAD + other non-good) / (GOOD + WARN + BAD) * 100
 - This is shown in the row as e.g. " 25% NG".
+
+Error summary
+-------------
+- Every time a request fails with an HTTP error, URL error, or exception,
+  the error message is recorded and its counter incremented.
+- At the bottom of the screen you will see:
+
+      Errors seen this session:
+        [   5x] URL error: [Errno 111] Connection refused
+        [   2x] HTTP 500: Internal Server Error
 
 Usage
 -----
@@ -262,6 +274,8 @@ def run_dashboard(
     last_errors = {e: "" for e in endpoints}
     # stats[ep] = {"non_good": int, "known": int}
     stats = {e: {"non_good": 0, "known": 0} for e in endpoints}
+    # error_counts[error_message] = count
+    error_counts = {}
 
     # Labels: truncated hostname by default, or full hostname if requested
     labels = {}
@@ -326,7 +340,12 @@ def run_dashboard(
                         if cls != "good":
                             stats[ep]["non_good"] += 1
 
-                    last_errors[ep] = extra.get("error") or extra.get("body", "") or ""
+                    err_msg = extra.get("error")
+                    if err_msg:
+                        error_counts[err_msg] = error_counts.get(err_msg, 0) + 1
+                        last_errors[ep] = err_msg
+                    else:
+                        last_errors[ep] = extra.get("body", "") or ""
             else:
                 for ep in endpoints:
                     status_text, extra = fetch_status(
@@ -342,7 +361,12 @@ def run_dashboard(
                         if cls != "good":
                             stats[ep]["non_good"] += 1
 
-                    last_errors[ep] = extra.get("error") or extra.get("body", "") or ""
+                    err_msg = extra.get("error")
+                    if err_msg:
+                        error_counts[err_msg] = error_counts.get(err_msg, 0) + 1
+                        last_errors[ep] = err_msg
+                    else:
+                        last_errors[ep] = extra.get("body", "") or ""
 
             # Draw per-endpoint rows
             row = 3
@@ -383,11 +407,25 @@ def run_dashboard(
 
                 row += 1
 
-                # Optional one-line error/info
+                # Optional one-line last info for this endpoint
                 err = last_errors.get(endpoint)
                 if err and row < h:
                     msg = f"  last info: {err}"
                     stdscr.addstr(row, 2, msg[:w - 3], curses.color_pair(5))
+                    row += 1
+
+            # Error summary section
+            if error_counts and row < h:
+                stdscr.addstr(row, 0, "Errors seen this session:", curses.color_pair(5))
+                row += 1
+                # Sort by count descending
+                for msg, count in sorted(
+                    error_counts.items(), key=lambda kv: kv[1], reverse=True
+                ):
+                    if row >= h:
+                        break
+                    line = f"  [{count:4d}x] {msg}"
+                    stdscr.addstr(row, 0, line[:w - 1], curses.color_pair(5))
                     row += 1
 
             stdscr.refresh()
