@@ -26,85 +26,6 @@ It:
     - IP addresses like 10.0.0.1 are shown in full.
   Use --show-full-hostnames to show the full hostname (including domain).
 
-Expected API (status mode)
---------------------------
-When using the status endpoint, this script assumes it returns JSON. It will:
-- Prefer a top-level key "status" if present.
-- Otherwise, if "services" is a list, it derives an overall status from
-  the services' "status" fields (checking for failures/warnings).
-
-Status classification rules (case-insensitive):
-- GOOD    -> "good", "ok", "okay", "healthy", "green"
-- WARN    -> any of "warn", "degrad", "yellow"
-- BAD     -> any of "bad", "down", "error", "fail", "critical", "red"
-- UNKNOWN -> anything else or missing.
-
-Ping mode
----------
-When using --ping:
-- Calls <base_url>/api/gateway/v1/ping/
-- Any successful HTTP response with no exception is treated as "good"
-- The response body is stored in extra_info["body"] for display/logging.
-- HTTP errors / timeouts are still treated as "down"/BAD.
-
-Non-good percentage
--------------------
-For each endpoint, the monitor keeps running stats:
-- It counts only samples that are not UNKNOWN.
-- % non-good = (WARN + BAD + other non-good) / (GOOD + WARN + BAD) * 100
-- This is shown in the row as e.g. " 25% NG".
-
-Per-endpoint error summary
---------------------------
-- Every time a request fails with an HTTP error, URL error, or exception,
-  the error message is recorded for that endpoint and its counter incremented.
-- At the bottom of the screen you will see something like:
-
-      Errors seen this session:
-        gw1:
-          [   5x] URL error: [Errno 111] Connection refused
-        gw2:
-          [   2x] HTTP 500: Internal Server Error
-
-Usage
------
-    ./aap_gateway_monitor.py \\
-        --token 'YOUR_BEARER_TOKEN' \\
-        --timeout 5 \\
-        --async-requests \\
-        https://lb.example.com \\
-        https://gw1.example.com \\
-        https://gw2.example.com \\
-        https://gw3.example.com \\
-        https://gw4.example.com
-
-    # Use /api/gateway/v1/ping/ instead of /api/gateway/v1/status/
-    ./aap_gateway_monitor.py \\
-        --token 'YOUR_BEARER_TOKEN' \\
-        --ping \\
-        https://gw1.example.com
-
-    # Show full hostnames (gw1.example.com instead of "gw1")
-    ./aap_gateway_monitor.py \\
-        --token 'YOUR_BEARER_TOKEN' \\
-        --show-full-hostnames \\
-        https://gw1.example.com https://gw2.example.com
-
-Arguments
----------
-Positional:
-  endpoints            One or more base URLs, e.g. https://gw1.example.com
-
-Options:
-  -t, --token          Bearer token to use for Authorization.
-  --timeout            Request timeout in seconds (default: 5).
-  --async-requests     Fetch statuses concurrently using worker threads.
-  --ping               Use /api/gateway/v1/ping/ instead of /api/gateway/v1/status/.
-  --show-full-hostnames
-                       Display full hostnames (including domain) instead of
-                       truncated hostnames.
-  -k, --insecure       Skip TLS certificate verification (self-signed, lab, etc.).
-
 Controls
 --------
 - Press 'q' or ESC to quit the dashboard.
@@ -123,7 +44,7 @@ from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 POLL_INTERVAL = 1.0         # seconds between polls
-HISTORY_LENGTH = 60         # number of points in the graph (seconds)
+HISTORY_LENGTH = 60         # number of points kept per endpoint
 
 # Host running the monitor
 MONITOR_HOST = socket.gethostname()
@@ -184,18 +105,14 @@ def fetch_status(base_url, token, timeout=5, insecure=False, use_ping=False):
             raw = resp.read().decode("utf-8", errors="replace")
 
             if use_ping:
-                # Any successful response is considered good.
                 extra = {"body": raw}
                 overall = "good"
                 return overall, extra
 
-            # Status mode: expect JSON
             data = json.loads(raw)
 
-            # Prefer top-level 'status', fall back to derived
             overall = data.get("status")
             if not overall and isinstance(data.get("services"), list):
-                # If any service isn't good, degrade status
                 statuses = [str(s.get("status", "")).lower()
                             for s in data["services"]]
                 if any("down" in s or "fail" in s or "error" in s for s in statuses):
@@ -216,9 +133,6 @@ def fetch_status(base_url, token, timeout=5, insecure=False, use_ping=False):
 
 
 def hostname_from_url(u):
-    """
-    Extract hostname from a URL or return the input if parsing fails.
-    """
     try:
         parsed = urlparse(u)
         if parsed.hostname:
@@ -230,21 +144,17 @@ def hostname_from_url(u):
 
 def truncate_hostname(host):
     """
-    Truncate a FQDN to just the host part:
-    - 'gw1.example.com' -> 'gw1'
-    - 'gw1' -> 'gw1'
-    - '10.0.0.1' -> '10.0.0.1'  (don't truncate IPs)
+    Truncate a FQDN to just the host part; keep IPs as-is.
     """
     if not host:
         return host
 
     parts = host.split(".")
 
-    # Detect simple IPv4 like 10.0.0.1
+    # IPv4-ish: all numeric parts
     if all(p.isdigit() for p in parts if p):
-        return host  # looks like an IP, keep full
+        return host
 
-    # For non-IPs, if FQDN, return first label
     if "." in host:
         return host.split(".", 1)[0]
     return host
@@ -280,19 +190,17 @@ def run_dashboard(
     # Histories and stats
     histories = {e: [] for e in endpoints}
     last_errors = {e: "" for e in endpoints}
-    # stats[ep] = {"non_good": int, "known": int}
     stats = {e: {"non_good": 0, "known": 0} for e in endpoints}
-    # error_counts[ep][error_message] = count
     error_counts = {e: {} for e in endpoints}
 
-    # Labels: truncated hostname by default, or full hostname if requested
+    # Labels (hostnames) and dynamic name width
     labels = {}
     for ep in endpoints:
         host = hostname_from_url(ep)
-        if show_full_hostnames:
-            labels[ep] = host
-        else:
-            labels[ep] = truncate_hostname(host)
+        labels[ep] = host if show_full_hostnames else truncate_hostname(host)
+
+    max_name_len = max((len(n) for n in labels.values()), default=4)
+    name_width = max(max_name_len, 4)
 
     executor = ThreadPoolExecutor(max_workers=len(endpoints)) if async_requests else None
 
@@ -322,7 +230,14 @@ def run_dashboard(
                 off += len("BAD ●   ")
                 stdscr.addstr(1, off, "UNKNOWN ●", color_for_class["unknown"])
 
-                # Poll endpoints (sequential or concurrent)
+                # Determine dynamic graph start and width based on name_width
+                # label = f"{name:{name_width}} [{status:7}] {pct:8}"
+                label_width = name_width + 19
+                x_start = label_width + 2
+                # Graph width limited by screen width and history length
+                graph_width = max(10, min(HISTORY_LENGTH, max(0, w - x_start - 1)))
+
+                # Poll endpoints
                 if async_requests and executor is not None:
                     future_to_ep = {
                         executor.submit(fetch_status, ep, token, timeout, insecure, use_ping): ep
@@ -340,7 +255,6 @@ def run_dashboard(
                         if len(histories[ep]) > HISTORY_LENGTH:
                             histories[ep] = histories[ep][-HISTORY_LENGTH:]
 
-                        # Update stats: ignore UNKNOWN
                         if cls != "unknown":
                             stats[ep]["known"] += 1
                             if cls != "good":
@@ -378,18 +292,15 @@ def run_dashboard(
 
                 # Draw per-endpoint rows
                 row = 3
-                x_start = 45  # where the graph starts
-                graph_width = max(10, w - x_start - 1)
 
                 for endpoint in endpoints:
                     if row >= h:
-                        break  # no more space on screen
+                        break
 
                     name = labels[endpoint]
                     latest_cls = histories[endpoint][-1] if histories[endpoint] else "unknown"
                     latest_str = latest_cls.upper()
 
-                    # Calculate % non-good (exclude UNKNOWN)
                     st = stats[endpoint]
                     if st["known"] > 0:
                         pct_ng = int(round(100.0 * st["non_good"] / st["known"]))
@@ -397,15 +308,11 @@ def run_dashboard(
                     else:
                         pct_str = "  -  "
 
-                    # Row label: endpoint label + latest status + % non-good
-                    label = f"{name:12} [{latest_str:7}] {pct_str:8}"
+                    label = f"{name:{name_width}} [{latest_str:7}] {pct_str:8}"
                     stdscr.addstr(row, 0, label[:x_start - 1], curses.color_pair(5))
 
-                    # History graph
+                    # History graph – NO LEFT PADDING WITH UNKNOWN
                     hist = histories[endpoint][-graph_width:]
-                    padding = graph_width - len(hist)
-                    hist = ["unknown"] * padding + hist  # pad left with unknowns
-
                     for i, cls in enumerate(hist):
                         x = x_start + i
                         if x >= w:
@@ -415,14 +322,13 @@ def run_dashboard(
 
                     row += 1
 
-                    # Optional one-line last info for this endpoint
                     err = last_errors.get(endpoint)
                     if err and row < h:
                         msg = f"  last info: {err}"
                         stdscr.addstr(row, 2, msg[:w - 3], curses.color_pair(5))
                         row += 1
 
-                # Per-endpoint error summary section
+                # Per-endpoint error summary
                 any_errors = any(error_counts[ep] for ep in endpoints)
                 if any_errors and row < h:
                     stdscr.addstr(row, 0, "Errors seen this session:", curses.color_pair(5))
@@ -450,7 +356,7 @@ def run_dashboard(
 
                 stdscr.refresh()
 
-                # Handle keypress (non-blocking)
+                # Handle keypress
                 remaining = POLL_INTERVAL - (time.time() - start)
                 end_wait = time.time() + max(0.0, remaining)
                 while time.time() < end_wait:
@@ -459,7 +365,6 @@ def run_dashboard(
                         return
                     time.sleep(0.05)
         except KeyboardInterrupt:
-            # Clean exit on Ctrl-C (no traceback)
             return
     finally:
         if executor is not None:
@@ -513,7 +418,6 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # Extra guard so Ctrl-C never prints a traceback
     try:
         curses.wrapper(
             run_dashboard,
