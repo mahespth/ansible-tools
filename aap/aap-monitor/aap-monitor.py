@@ -26,9 +26,14 @@ It:
 - Keeps recent jobs on screen even after they finish; their colour/status
   changes as they complete:
     - Running jobs: highlighted with reverse video.
-    - Successful/completed jobs: dimmed grey.
+    - Successful/completed jobs: dim grey.
     - Failed/error jobs: red.
 - Jobs are displayed from newest to oldest by job ID.
+- Allows zooming into a single job's details/output:
+    - Press 'v' in the main view, enter job ID.
+    - Shows job metadata and scrollable stdout.
+    - q or ESC to return to main dashboard.
+    - If the job is running, detail view auto-refreshes every 5 seconds.
 - Uses only Python standard library modules (suitable for typical AAP installs).
 
 Assumed API Endpoints (AAP 2.5)
@@ -45,6 +50,12 @@ Controller endpoints:
 - Recent jobs (all statuses):
     GET /api/controller/v2/jobs/?order_by=-started&page_size=N
 
+- Job detail:
+    GET /api/controller/v2/jobs/<id>/
+
+- Job stdout:
+    GET /api/controller/v2/jobs/<id>/stdout/?format=txt
+
 Authentication
 --------------
 The script expects a Bearer token and sends:
@@ -54,45 +65,22 @@ The script expects a Bearer token and sends:
 If your environment uses a different auth header (e.g. "Token"), adjust
 AUTH_SCHEME below.
 
-Color / Status Scheme
----------------------
-Instances:
-- GOOD   (green)   -> enabled, no (or empty) "errors" field
-- WARN   (yellow)  -> enabled but "errors" is present/non-empty, or capacity is 0
-- BAD    (red)     -> disabled, or a fatal-looking "errors" field
-- UNKNOWN (cyan)   -> anything else / unexpected data
-
-Jobs:
-- GOOD   (green)   -> generic good state
-- BAD    (red)     -> any status containing "fail" or "error"
-- Running jobs: GOOD colour + reverse video (highlighted).
-- Successful/completed: dim grey (white + DIM).
-- WARN / UNKNOWN   -> available if you extend mappings.
-
 Usage
 -----
     ./aap_monitor.py \
         --token 'YOUR_BEARER_TOKEN' \
         https://gateway.example.com
 
-Options
--------
-Positional:
-  base_url             Base URL of the AAP Gateway/Controller,
-                       e.g. https://gateway.example.com
-
-Flags:
-  -t, --token          Bearer token for Authorization header.
-  --timeout            Request timeout (seconds). Default: 5.
-  --poll-interval      Polling interval (seconds). Default: 2.
-  --insecure, -k       Skip TLS certificate verification (self-signed/lab).
-  --page-size          How many recent jobs to fetch (and keep on screen).
-                       Default: 50 (displayed up to MAX_JOBS_DISPLAY rows).
-
 Controls
 --------
-- Press 'q' or ESC to quit the dashboard.
-- Press Ctrl-C to exit cleanly (no traceback).
+Main dashboard:
+- q or ESC : quit the program
+- v        : view a job by ID (prompts for job ID)
+
+Job view:
+- Up/Down, PgUp/PgDn : scroll output
+- q or ESC           : return to main dashboard
+- Output for running jobs auto-refreshes every 5 seconds.
 
 """
 
@@ -273,6 +261,29 @@ def api_get(base_url, path, token, timeout, insecure=False, query=None):
         return json.loads(raw)
 
 
+def api_get_text(base_url, path, token, timeout, insecure=False, query=None):
+    """
+    GET a text endpoint (e.g. job stdout) and return the decoded text.
+    """
+    base_url = base_url.rstrip("/") + "/"
+    url = urljoin(base_url, path.lstrip("/"))
+    if query:
+        qs = urlencode(query)
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}{qs}"
+
+    headers = {
+        "Authorization": f"{AUTH_SCHEME} {token}",
+        "Accept": "text/plain,*/*",
+    }
+
+    ctx = build_ssl_context(insecure)
+    req = request.Request(url, headers=headers)
+
+    with request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
 def fetch_instances(base_url, token, timeout, insecure=False):
     """
     Fetch Controller instances (cluster topology).
@@ -324,8 +335,293 @@ def fetch_recent_jobs(base_url, token, timeout, insecure=False, page_size=DEFAUL
         return [], f"Exception on /jobs/: {e}"
 
 
+def fetch_job_detail(base_url, token, timeout, insecure, job_id):
+    """
+    Fetch a single job's details.
+    GET /api/controller/v2/jobs/<id>/
+    """
+    try:
+        job = api_get(
+            base_url,
+            f"/api/controller/v2/jobs/{job_id}/",
+            token,
+            timeout,
+            insecure,
+        )
+        if not isinstance(job, dict):
+            return None, "Unexpected job detail format"
+        return job, None
+    except error.HTTPError as e:
+        return None, f"HTTP {e.code} on job {job_id}: {e.reason}"
+    except error.URLError as e:
+        return None, f"URL error on job {job_id}: {e.reason}"
+    except Exception as e:
+        return None, f"Exception on job {job_id}: {e}"
+
+
+def fetch_job_stdout(base_url, token, timeout, insecure, job_id):
+    """
+    Fetch job stdout as text.
+    GET /api/controller/v2/jobs/<id>/stdout/?format=txt
+    """
+    try:
+        text = api_get_text(
+            base_url,
+            f"/api/controller/v2/jobs/{job_id}/stdout/",
+            token,
+            timeout,
+            insecure,
+            query={"format": "txt"},
+        )
+        return text, None
+    except error.HTTPError as e:
+        return "", f"HTTP {e.code} on job {job_id} stdout: {e.reason}"
+    except error.URLError as e:
+        return "", f"URL error on job {job_id} stdout: {e.reason}"
+    except Exception as e:
+        return "", f"Exception on job {job_id} stdout: {e}"
+
+
 # ---------------------------------------------------------------------------
-# Curses dashboard
+# Job ID prompt & job view
+# ---------------------------------------------------------------------------
+
+def prompt_for_job_id(stdscr):
+    """
+    Prompt the user for a job ID at the bottom of the screen.
+    Returns an int job_id, or None if cancelled.
+    """
+    h, w = stdscr.getmaxyx()
+    prompt = "Job ID to view (Enter to confirm, ESC to cancel): "
+    job_str = ""
+
+    stdscr.nodelay(False)  # make getch blocking while typing
+
+    while True:
+        stdscr.move(h - 1, 0)
+        stdscr.clrtoeol()
+        line = prompt + job_str
+        stdscr.addstr(h - 1, 0, line[: w - 1])
+        stdscr.refresh()
+
+        ch = stdscr.getch()
+        if ch in (10, 13):  # Enter
+            break
+        if ch == 27:  # ESC
+            job_str = ""
+            break
+        if ch in (curses.KEY_BACKSPACE, 127, 8):
+            job_str = job_str[:-1]
+        elif 48 <= ch <= 57:  # digits 0-9
+            job_str += chr(ch)
+        # ignore everything else
+
+    stdscr.nodelay(True)  # restore non-blocking
+    if not job_str:
+        return None
+    try:
+        return int(job_str)
+    except ValueError:
+        return None
+
+
+def job_view(stdscr, base_url, token, timeout, insecure, job_id):
+    """
+    Show a single job's details and stdout in a scrollable view.
+    q or ESC returns to caller.
+    Running jobs auto-refresh every 5 seconds.
+    """
+    # Use a small timeout in getch to allow periodic refresh
+    stdscr.timeout(200)  # 200 ms
+
+    scroll = 0
+    last_fetch = 0
+    job = None
+    job_err = None
+    stdout_text = ""
+    stdout_err = None
+
+    try:
+        while True:
+            now = time.time()
+            # Decide whether to refresh
+            running = False
+            if job and isinstance(job, dict):
+                status = str(job.get("status", "")).lower()
+                running = (status == "running")
+
+            refresh_interval = 5.0 if running else 60.0  # non-running: refresh occasionally
+
+            if now - last_fetch >= refresh_interval or job is None:
+                job, job_err = fetch_job_detail(
+                    base_url, token, timeout, insecure, job_id
+                )
+                stdout_text, stdout_err = fetch_job_stdout(
+                    base_url, token, timeout, insecure, job_id
+                )
+                last_fetch = now
+                # Reset scroll if new content appears
+                scroll = min(scroll, max(0, len(stdout_text.splitlines()) - 1))
+
+            h, w = stdscr.getmaxyx()
+            stdscr.erase()
+
+            # Header
+            now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+            title = f"AAP Job View (ID {job_id})"
+            header = f"{title}  {now_str}  host:{MONITOR_HOST}"
+            stdscr.addstr(0, 0, header[: w - 1], curses.color_pair(5))
+
+            row = 2
+
+            # Job metadata
+            if job is None:
+                msg = f"Unable to load job {job_id}: {job_err or 'unknown error'}"
+                stdscr.addstr(row, 0, msg[: w - 1], curses.color_pair(3))
+                row += 2
+            else:
+                status = job.get("status") or "?"
+                status_lower = str(status).lower()
+                name = str(job.get("name") or "")
+                job_type = job.get("job_type") or ""
+                template_name = ""
+                sf = job.get("summary_fields") or {}
+                jt = sf.get("job_template") or {}
+                if isinstance(jt, dict):
+                    template_name = jt.get("name") or ""
+                created_by = sf.get("created_by") or {}
+                user = created_by.get("username") or created_by.get("first_name") or "?"
+                started_raw = job.get("started")
+                finished_raw = job.get("finished")
+                started_dt = parse_iso8601(started_raw)
+                finished_dt = parse_iso8601(finished_raw)
+                elapsed = job.get("elapsed")
+
+                try:
+                    elapsed_val = float(elapsed) if elapsed is not None else 0.0
+                except Exception:
+                    elapsed_val = 0.0
+
+                if elapsed is None or elapsed_val <= 0.0:
+                    if started_dt:
+                        elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
+                    else:
+                        elapsed = None
+
+                elapsed_str = format_elapsed(elapsed)
+
+                cls = classify_status_text(status)
+                base_style = curses.color_pair(5)
+                if status_lower == "running":
+                    status_style = curses.color_pair(1) | curses.A_REVERSE
+                elif status_lower in ("successful", "completed", "finished"):
+                    status_style = curses.color_pair(5) | curses.A_DIM
+                elif cls == "bad":
+                    status_style = curses.color_pair(3)
+                else:
+                    status_style = base_style
+
+                stdscr.addstr(row, 0, f"Name:     {name}"[: w - 1], base_style)
+                row += 1
+                stdscr.addstr(row, 0, f"Template: {template_name}"[: w - 1], base_style)
+                row += 1
+                stdscr.addstr(row, 0, f"User:     {user}"[: w - 1], base_style)
+                row += 1
+                stdscr.addstr(row, 0, "Status:   ", base_style)
+                stdscr.addstr(row, len("Status:   "), f"{status}", status_style)
+                row += 1
+                stdscr.addstr(
+                    row,
+                    0,
+                    f"Type:     {job_type}"[: w - 1],
+                    base_style,
+                )
+                row += 1
+                stdscr.addstr(
+                    row,
+                    0,
+                    f"Started:  {started_raw or '-'}"[: w - 1],
+                    base_style,
+                )
+                row += 1
+                stdscr.addstr(
+                    row,
+                    0,
+                    f"Finished: {finished_raw or '-'}"[: w - 1],
+                    base_style,
+                )
+                row += 1
+                stdscr.addstr(
+                    row,
+                    0,
+                    f"Elapsed:  {elapsed_str}"[: w - 1],
+                    base_style,
+                )
+                row += 2
+
+                stdscr.addstr(
+                    row,
+                    0,
+                    "Output (Up/Down/PgUp/PgDn to scroll, q/ESC to return):"[: w - 1],
+                    curses.color_pair(5),
+                )
+                row += 1
+
+            # Output area
+            top_row = row
+            max_lines = max(1, h - top_row - 1)
+
+            if stdout_text:
+                lines = stdout_text.splitlines()
+            else:
+                lines = ["<no output>"]
+
+            max_scroll = max(0, len(lines) - max_lines)
+            scroll = max(0, min(scroll, max_scroll))
+
+            visible = lines[scroll : scroll + max_lines]
+            for idx, line in enumerate(visible):
+                if top_row + idx >= h:
+                    break
+                stdscr.addstr(
+                    top_row + idx, 0,
+                    line[: w - 1],
+                    curses.color_pair(5),
+                )
+
+            # If there was an error fetching stdout, show it at the bottom
+            if stdout_err and top_row + len(visible) < h:
+                err_line = f"stdout error: {stdout_err}"
+                stdscr.addstr(
+                    h - 1, 0,
+                    err_line[: w - 1],
+                    curses.color_pair(4),
+                )
+
+            stdscr.refresh()
+
+            # Handle keys
+            ch = stdscr.getch()
+            if ch in (ord("q"), ord("Q"), 27):  # q or ESC
+                break
+            elif ch == curses.KEY_UP:
+                scroll = max(0, scroll - 1)
+            elif ch == curses.KEY_DOWN:
+                scroll = min(max_scroll, scroll + 1)
+            elif ch == curses.KEY_PPAGE:  # PgUp
+                scroll = max(0, scroll - max_lines)
+            elif ch == curses.KEY_NPAGE:  # PgDn
+                scroll = min(max_scroll, scroll + max_lines)
+            # Everything else: ignore; loop continues, refresh timer handled above
+
+    finally:
+        # return to non-blocking for main dashboard
+        stdscr.timeout(-1)
+        stdscr.nodelay(True)
+
+
+# ---------------------------------------------------------------------------
+# Main dashboard
 # ---------------------------------------------------------------------------
 
 def run_dashboard(
@@ -420,7 +716,8 @@ def run_dashboard(
 
                 summary = (
                     f"Instances: G={good_i} W={warn_i} B={bad_i} U={unknown_i}  "
-                    f"Recent jobs: {len(jobs)}  running={running_jobs}  failed={failed_jobs}"
+                    f"Recent jobs: {len(jobs)}  running={running_jobs}  failed={failed_jobs}  "
+                    f"(press 'v' for job view)"
                 )
                 stdscr.addstr(1, 0, summary[:w - 1], curses.color_pair(5))
 
@@ -585,12 +882,9 @@ def run_dashboard(
                     cls = classify_status_text(status_str)
                     base_style = color_for_class.get(cls, curses.color_pair(5))
 
-                    # Style tweaks:
-                    # - Running: reverse video highlight
-                    # - Successful/completed: dim grey (white + DIM)
-                    # - Failed/error: red (cls == 'bad')
+                    # Style tweaks for jobs:
                     if status_lower == "running":
-                        style = color_for_class["good"] | curses.A_REVERSE
+                        style = curses.color_pair(1) | curses.A_REVERSE
                     elif status_lower in ("successful", "completed", "finished"):
                         style = curses.color_pair(5) | curses.A_DIM
                     elif cls == "bad":
@@ -625,6 +919,12 @@ def run_dashboard(
                     ch = stdscr.getch()
                     if ch in (ord("q"), ord("Q"), 27):  # q or ESC
                         return
+                    if ch in (ord("v"), ord("V")):
+                        job_id = prompt_for_job_id(stdscr)
+                        if job_id is not None:
+                            job_view(stdscr, base_url, token, timeout, insecure, job_id)
+                            # after job_view returns, redraw dashboard immediately
+                            break
                     time.sleep(0.05)
         except KeyboardInterrupt:
             # clean exit on Ctrl-C
@@ -697,3 +997,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
