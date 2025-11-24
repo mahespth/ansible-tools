@@ -11,12 +11,17 @@ AAP gateways and/or a load balancer.
 It:
 - Polls one or more endpoints every second.
 - By default calls:  <base_url>/api/gateway/v1/status/
-- Optionally calls:  <base_url>/ping  instead (with --ping).
+- Optionally calls:  <base_url>/api/gateway/v1/ping/ instead (with --ping).
 - Sends a Bearer token in the Authorization header.
 - Classifies status into: GOOD / WARN / BAD / UNKNOWN.
 - Displays a scrolling, colored graph of recent status for each endpoint.
+- Tracks and displays the % of requests that are NOT GOOD, ignoring UNKNOWN.
 - Uses only the Python standard library (suitable for typical AAP installs).
 - Can optionally fetch all endpoints concurrently using threads.
+- By default shows a truncated hostname:
+    - FQDN like gw1.example.com -> "gw1"
+    - IP addresses like 10.0.0.1 are shown in full.
+  Use --show-full-hostnames to show the full hostname (including domain).
 
 Expected API (status mode)
 --------------------------
@@ -34,10 +39,17 @@ Status classification rules (case-insensitive):
 Ping mode
 ---------
 When using --ping:
-- Calls <base_url>/ping
+- Calls <base_url>/api/gateway/v1/ping/
 - Any successful HTTP response with no exception is treated as "good"
 - The response body is stored in extra_info["body"] for display/logging.
 - HTTP errors / timeouts are still treated as "down"/BAD.
+
+Non-good percentage
+-------------------
+For each endpoint, the monitor keeps running stats:
+- It counts only samples that are not UNKNOWN.
+- % non-good = (WARN + BAD + other non-good) / (GOOD + WARN + BAD) * 100
+- This is shown in the row as e.g. " 25% NG".
 
 Usage
 -----
@@ -51,23 +63,32 @@ Usage
         https://gw3.example.com \\
         https://gw4.example.com
 
-    # Use /api/gateway/v1/ping instead of /api/gateway/v1/status/
+    # Use /api/gateway/v1/ping/ instead of /api/gateway/v1/status/
     ./aap_gateway_monitor.py \\
         --token 'YOUR_BEARER_TOKEN' \\
         --ping \\
         https://gw1.example.com
 
+    # Show full hostnames (gw1.example.com instead of "gw1")
+    ./aap_gateway_monitor.py \\
+        --token 'YOUR_BEARER_TOKEN' \\
+        --show-full-hostnames \\
+        https://gw1.example.com https://gw2.example.com
+
 Arguments
 ---------
 Positional:
-  endpoints         One or more base URLs, e.g. https://gw1.example.com
+  endpoints            One or more base URLs, e.g. https://gw1.example.com
 
 Options:
-  -t, --token       Bearer token to use for Authorization.
-  --timeout         Request timeout in seconds (default: 5).
-  --async-requests  Fetch statuses concurrently using worker threads.
-  --ping            Use /ping endpoint instead of /api/gateway/v1/status/.
-  -k, --insecure    Skip TLS certificate verification (self-signed, lab, etc.).
+  -t, --token          Bearer token to use for Authorization.
+  --timeout            Request timeout in seconds (default: 5).
+  --async-requests     Fetch statuses concurrently using worker threads.
+  --ping               Use /api/gateway/v1/ping/ instead of /api/gateway/v1/status/.
+  --show-full-hostnames
+                       Display full hostnames (including domain) instead of
+                       truncated hostnames.
+  -k, --insecure       Skip TLS certificate verification (self-signed, lab, etc.).
 
 Controls
 --------
@@ -117,7 +138,7 @@ def fetch_status(base_url, token, timeout=5, insecure=False, use_ping=False):
         <base_url>/api/gateway/v1/status/
         Expects JSON and derives an overall status.
     - If use_ping is True:
-        <base_url>/ping
+        <base_url>/api/gateway/v1/ping/
         Treats any successful call as "good" and returns body in extra_info.
     """
     base_url = base_url.rstrip("/")
@@ -174,19 +195,51 @@ def fetch_status(base_url, token, timeout=5, insecure=False, use_ping=False):
         return "down", {"error": f"Exception: {e}"}
 
 
-def short_name_from_url(u):
+def hostname_from_url(u):
+    """
+    Extract hostname from a URL or return the input if parsing fails.
+    """
     try:
         parsed = urlparse(u)
         if parsed.hostname:
             return parsed.hostname
     except Exception:
         pass
-    # fall back
     return u
 
 
-def run_dashboard(stdscr, endpoints, token, timeout, insecure=False,
-                  async_requests=False, use_ping=False):
+def truncate_hostname(host):
+    """
+    Truncate a FQDN to just the host part:
+    - 'gw1.example.com' -> 'gw1'
+    - 'gw1' -> 'gw1'
+    - '10.0.0.1' -> '10.0.0.1'  (don't truncate IPs)
+    """
+    if not host:
+        return host
+
+    parts = host.split(".")
+
+    # Detect simple IPv4 like 10.0.0.1
+    if all(p.isdigit() for p in parts if p):
+        return host  # looks like an IP, keep full
+
+    # For non-IPs, if FQDN, return first label
+    if "." in host:
+        return host.split(".", 1)[0]
+    return host
+
+
+def run_dashboard(
+    stdscr,
+    endpoints,
+    token,
+    timeout,
+    insecure=False,
+    async_requests=False,
+    use_ping=False,
+    show_full_hostnames=False,
+):
     curses.curs_set(0)
     stdscr.nodelay(True)
     curses.start_color()
@@ -204,8 +257,20 @@ def run_dashboard(stdscr, endpoints, token, timeout, insecure=False,
         "unknown": curses.color_pair(4),
     }
 
+    # Histories and stats
     histories = {e: [] for e in endpoints}
     last_errors = {e: "" for e in endpoints}
+    # stats[ep] = {"non_good": int, "known": int}
+    stats = {e: {"non_good": 0, "known": 0} for e in endpoints}
+
+    # Labels: truncated hostname by default, or full hostname if requested
+    labels = {}
+    for ep in endpoints:
+        host = hostname_from_url(ep)
+        if show_full_hostnames:
+            labels[ep] = host
+        else:
+            labels[ep] = truncate_hostname(host)
 
     executor = ThreadPoolExecutor(max_workers=len(endpoints)) if async_requests else None
 
@@ -217,13 +282,17 @@ def run_dashboard(stdscr, endpoints, token, timeout, insecure=False,
 
             # Header
             mode_str = "PING" if use_ping else "STATUS"
-            title = f"AAP Gateway Health Monitor [{mode_str} mode] (press 'q' to quit)"
+            host_mode_str = "FULL" if show_full_hostnames else "TRUNC"
+            title = (
+                f"AAP Gateway Health Monitor [{mode_str} | {host_mode_str}] "
+                "(press 'q' to quit)"
+            )
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             header = f"{title}  {now}"
             stdscr.addstr(0, 0, header[:w - 1], curses.color_pair(5))
 
             # Legend
-            legend = "Legend: GOOD ●   WARN ●   BAD ●   UNKNOWN ●"
+            legend = "Legend: GOOD ●   WARN ●   BAD ●   UNKNOWN ●   %NG = non-good (excl. UNKNOWN)"
             stdscr.addstr(1, 0, legend[:w - 1], curses.color_pair(5))
             stdscr.addstr(1, len("Legend: "), "GOOD ●", color_for_class["good"])
             off = len("Legend: GOOD ●   ")
@@ -250,6 +319,13 @@ def run_dashboard(stdscr, endpoints, token, timeout, insecure=False,
                     histories[ep].append(cls)
                     if len(histories[ep]) > HISTORY_LENGTH:
                         histories[ep] = histories[ep][-HISTORY_LENGTH:]
+
+                    # Update stats: ignore UNKNOWN
+                    if cls != "unknown":
+                        stats[ep]["known"] += 1
+                        if cls != "good":
+                            stats[ep]["non_good"] += 1
+
                     last_errors[ep] = extra.get("error") or extra.get("body", "") or ""
             else:
                 for ep in endpoints:
@@ -260,30 +336,43 @@ def run_dashboard(stdscr, endpoints, token, timeout, insecure=False,
                     histories[ep].append(cls)
                     if len(histories[ep]) > HISTORY_LENGTH:
                         histories[ep] = histories[ep][-HISTORY_LENGTH:]
+
+                    if cls != "unknown":
+                        stats[ep]["known"] += 1
+                        if cls != "good":
+                            stats[ep]["non_good"] += 1
+
                     last_errors[ep] = extra.get("error") or extra.get("body", "") or ""
 
             # Draw per-endpoint rows
             row = 3
-            graph_width = max(10, w - 35)  # space for name + status text
+            x_start = 45  # where the graph starts
+            graph_width = max(10, w - x_start - 1)
 
             for endpoint in endpoints:
                 if row >= h:
                     break  # no more space on screen
 
-                name = short_name_from_url(endpoint)
+                name = labels[endpoint]
                 latest_cls = histories[endpoint][-1] if histories[endpoint] else "unknown"
                 latest_str = latest_cls.upper()
 
-                # Row label: endpoint + latest status
-                label = f"{name:20} [{latest_str:7}] "
-                stdscr.addstr(row, 0, label[:30], curses.color_pair(5))
+                # Calculate % non-good (exclude UNKNOWN)
+                st = stats[endpoint]
+                if st["known"] > 0:
+                    pct_ng = int(round(100.0 * st["non_good"] / st["known"]))
+                    pct_str = f"{pct_ng:3d}% NG"
+                else:
+                    pct_str = "  -  "
 
-                # History graph (right to left)
+                # Row label: endpoint label + latest status + % non-good
+                label = f"{name:12} [{latest_str:7}] {pct_str:8}"
+                stdscr.addstr(row, 0, label[:x_start - 1], curses.color_pair(5))
+
+                # History graph
                 hist = histories[endpoint][-graph_width:]
-                x_start = 30
                 padding = graph_width - len(hist)
-                # pad with unknown to the left
-                hist = ["unknown"] * padding + hist
+                hist = ["unknown"] * padding + hist  # pad left with unknowns
 
                 for i, cls in enumerate(hist):
                     x = x_start + i
@@ -349,7 +438,12 @@ def parse_args():
     p.add_argument(
         "--ping",
         action="store_true",
-        help="Use /ping endpoint instead of /api/gateway/v1/status/.",
+        help="Use /api/gateway/v1/ping/ instead of /api/gateway/v1/status/.",
+    )
+    p.add_argument(
+        "--show-full-hostnames",
+        action="store_true",
+        help="Display full hostnames (including domain) instead of truncated hostnames.",
     )
     p.add_argument(
         "--insecure",
@@ -370,6 +464,7 @@ def main():
         args.insecure,
         args.async_requests,
         args.ping,
+        args.show_full_hostnames,
     )
 
 
