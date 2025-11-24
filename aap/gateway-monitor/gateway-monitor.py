@@ -16,8 +16,9 @@ It:
 - Classifies status into: GOOD / WARN / BAD / UNKNOWN.
 - Displays a scrolling, colored graph of recent status for each endpoint.
 - Tracks and displays the % of requests that are NOT GOOD, ignoring UNKNOWN.
-- Tracks how many times each distinct error has occurred and shows an
-  "Errors seen this session" section under the hosts.
+- Tracks how many times each distinct error has occurred per endpoint and
+  shows an error section grouped by endpoint label.
+- Shows in the header which host the monitor itself is running on.
 - Uses only the Python standard library (suitable for typical AAP installs).
 - Can optionally fetch all endpoints concurrently using threads.
 - By default shows a truncated hostname:
@@ -53,15 +54,17 @@ For each endpoint, the monitor keeps running stats:
 - % non-good = (WARN + BAD + other non-good) / (GOOD + WARN + BAD) * 100
 - This is shown in the row as e.g. " 25% NG".
 
-Error summary
--------------
+Per-endpoint error summary
+--------------------------
 - Every time a request fails with an HTTP error, URL error, or exception,
-  the error message is recorded and its counter incremented.
-- At the bottom of the screen you will see:
+  the error message is recorded for that endpoint and its counter incremented.
+- At the bottom of the screen you will see something like:
 
       Errors seen this session:
-        [   5x] URL error: [Errno 111] Connection refused
-        [   2x] HTTP 500: Internal Server Error
+        gw1:
+          [   5x] URL error: [Errno 111] Connection refused
+        gw2:
+          [   2x] HTTP 500: Internal Server Error
 
 Usage
 -----
@@ -105,6 +108,7 @@ Options:
 Controls
 --------
 - Press 'q' or ESC to quit the dashboard.
+- Press Ctrl-C to exit cleanly (no traceback).
 
 """
 
@@ -113,12 +117,16 @@ import json
 import time
 import curses
 import ssl
+import socket
 from urllib import request, error
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 POLL_INTERVAL = 1.0         # seconds between polls
 HISTORY_LENGTH = 60         # number of points in the graph (seconds)
+
+# Host running the monitor
+MONITOR_HOST = socket.gethostname()
 
 
 def classify_status(status):
@@ -274,8 +282,8 @@ def run_dashboard(
     last_errors = {e: "" for e in endpoints}
     # stats[ep] = {"non_good": int, "known": int}
     stats = {e: {"non_good": 0, "known": 0} for e in endpoints}
-    # error_counts[error_message] = count
-    error_counts = {}
+    # error_counts[ep][error_message] = count
+    error_counts = {e: {} for e in endpoints}
 
     # Labels: truncated hostname by default, or full hostname if requested
     labels = {}
@@ -289,159 +297,170 @@ def run_dashboard(
     executor = ThreadPoolExecutor(max_workers=len(endpoints)) if async_requests else None
 
     try:
-        while True:
-            start = time.time()
-            h, w = stdscr.getmaxyx()
-            stdscr.erase()
+        try:
+            while True:
+                start = time.time()
+                h, w = stdscr.getmaxyx()
+                stdscr.erase()
 
-            # Header
-            mode_str = "PING" if use_ping else "STATUS"
-            host_mode_str = "FULL" if show_full_hostnames else "TRUNC"
-            title = (
-                f"AAP Gateway Health Monitor [{mode_str} | {host_mode_str}] "
-                "(press 'q' to quit)"
-            )
-            now = time.strftime("%Y-%m-%d %H:%M:%S")
-            header = f"{title}  {now}"
-            stdscr.addstr(0, 0, header[:w - 1], curses.color_pair(5))
+                # Header
+                mode_str = "PING" if use_ping else "STATUS"
+                host_mode_str = "FULL" if show_full_hostnames else "TRUNC"
+                title = f"AAP Gateway Health Monitor [{mode_str} | {host_mode_str}] (press 'q' to quit)"
+                now = time.strftime("%Y-%m-%d %H:%M:%S")
+                header = f"{title}  {now}  host:{MONITOR_HOST}"
+                stdscr.addstr(0, 0, header[:w - 1], curses.color_pair(5))
 
-            # Legend
-            legend = "Legend: GOOD ●   WARN ●   BAD ●   UNKNOWN ●   %NG = non-good (excl. UNKNOWN)"
-            stdscr.addstr(1, 0, legend[:w - 1], curses.color_pair(5))
-            stdscr.addstr(1, len("Legend: "), "GOOD ●", color_for_class["good"])
-            off = len("Legend: GOOD ●   ")
-            stdscr.addstr(1, off, "WARN ●", color_for_class["warn"])
-            off += len("WARN ●   ")
-            stdscr.addstr(1, off, "BAD ●", color_for_class["bad"])
-            off += len("BAD ●   ")
-            stdscr.addstr(1, off, "UNKNOWN ●", color_for_class["unknown"])
+                # Legend
+                legend = "Legend: GOOD ●   WARN ●   BAD ●   UNKNOWN ●   %NG = non-good (excl. UNKNOWN)"
+                stdscr.addstr(1, 0, legend[:w - 1], curses.color_pair(5))
+                stdscr.addstr(1, len("Legend: "), "GOOD ●", color_for_class["good"])
+                off = len("Legend: GOOD ●   ")
+                stdscr.addstr(1, off, "WARN ●", color_for_class["warn"])
+                off += len("WARN ●   ")
+                stdscr.addstr(1, off, "BAD ●", color_for_class["bad"])
+                off += len("BAD ●   ")
+                stdscr.addstr(1, off, "UNKNOWN ●", color_for_class["unknown"])
 
-            # Poll endpoints (sequential or concurrent)
-            if async_requests and executor is not None:
-                future_to_ep = {
-                    executor.submit(fetch_status, ep, token, timeout, insecure, use_ping): ep
-                    for ep in endpoints
-                }
-                for fut in as_completed(future_to_ep):
-                    ep = future_to_ep[fut]
-                    try:
-                        status_text, extra = fut.result()
-                    except Exception as e:
-                        status_text, extra = "down", {"error": f"Exception: {e}"}
+                # Poll endpoints (sequential or concurrent)
+                if async_requests and executor is not None:
+                    future_to_ep = {
+                        executor.submit(fetch_status, ep, token, timeout, insecure, use_ping): ep
+                        for ep in endpoints
+                    }
+                    for fut in as_completed(future_to_ep):
+                        ep = future_to_ep[fut]
+                        try:
+                            status_text, extra = fut.result()
+                        except Exception as e:
+                            status_text, extra = "down", {"error": f"Exception: {e}"}
 
-                    cls = classify_status(status_text)
-                    histories[ep].append(cls)
-                    if len(histories[ep]) > HISTORY_LENGTH:
-                        histories[ep] = histories[ep][-HISTORY_LENGTH:]
+                        cls = classify_status(status_text)
+                        histories[ep].append(cls)
+                        if len(histories[ep]) > HISTORY_LENGTH:
+                            histories[ep] = histories[ep][-HISTORY_LENGTH:]
 
-                    # Update stats: ignore UNKNOWN
-                    if cls != "unknown":
-                        stats[ep]["known"] += 1
-                        if cls != "good":
-                            stats[ep]["non_good"] += 1
+                        # Update stats: ignore UNKNOWN
+                        if cls != "unknown":
+                            stats[ep]["known"] += 1
+                            if cls != "good":
+                                stats[ep]["non_good"] += 1
 
-                    err_msg = extra.get("error")
-                    if err_msg:
-                        error_counts[err_msg] = error_counts.get(err_msg, 0) + 1
-                        last_errors[ep] = err_msg
-                    else:
-                        last_errors[ep] = extra.get("body", "") or ""
-            else:
-                for ep in endpoints:
-                    status_text, extra = fetch_status(
-                        ep, token, timeout=timeout, insecure=insecure, use_ping=use_ping
-                    )
-                    cls = classify_status(status_text)
-                    histories[ep].append(cls)
-                    if len(histories[ep]) > HISTORY_LENGTH:
-                        histories[ep] = histories[ep][-HISTORY_LENGTH:]
-
-                    if cls != "unknown":
-                        stats[ep]["known"] += 1
-                        if cls != "good":
-                            stats[ep]["non_good"] += 1
-
-                    err_msg = extra.get("error")
-                    if err_msg:
-                        error_counts[err_msg] = error_counts.get(err_msg, 0) + 1
-                        last_errors[ep] = err_msg
-                    else:
-                        last_errors[ep] = extra.get("body", "") or ""
-
-            # Draw per-endpoint rows
-            row = 3
-            x_start = 45  # where the graph starts
-            graph_width = max(10, w - x_start - 1)
-
-            for endpoint in endpoints:
-                if row >= h:
-                    break  # no more space on screen
-
-                name = labels[endpoint]
-                latest_cls = histories[endpoint][-1] if histories[endpoint] else "unknown"
-                latest_str = latest_cls.upper()
-
-                # Calculate % non-good (exclude UNKNOWN)
-                st = stats[endpoint]
-                if st["known"] > 0:
-                    pct_ng = int(round(100.0 * st["non_good"] / st["known"]))
-                    pct_str = f"{pct_ng:3d}% NG"
+                        err_msg = extra.get("error")
+                        if err_msg:
+                            endpoint_errors = error_counts.setdefault(ep, {})
+                            endpoint_errors[err_msg] = endpoint_errors.get(err_msg, 0) + 1
+                            last_errors[ep] = err_msg
+                        else:
+                            last_errors[ep] = extra.get("body", "") or ""
                 else:
-                    pct_str = "  -  "
+                    for ep in endpoints:
+                        status_text, extra = fetch_status(
+                            ep, token, timeout=timeout, insecure=insecure, use_ping=use_ping
+                        )
+                        cls = classify_status(status_text)
+                        histories[ep].append(cls)
+                        if len(histories[ep]) > HISTORY_LENGTH:
+                            histories[ep] = histories[ep][-HISTORY_LENGTH:]
 
-                # Row label: endpoint label + latest status + % non-good
-                label = f"{name:12} [{latest_str:7}] {pct_str:8}"
-                stdscr.addstr(row, 0, label[:x_start - 1], curses.color_pair(5))
+                        if cls != "unknown":
+                            stats[ep]["known"] += 1
+                            if cls != "good":
+                                stats[ep]["non_good"] += 1
 
-                # History graph
-                hist = histories[endpoint][-graph_width:]
-                padding = graph_width - len(hist)
-                hist = ["unknown"] * padding + hist  # pad left with unknowns
+                        err_msg = extra.get("error")
+                        if err_msg:
+                            endpoint_errors = error_counts.setdefault(ep, {})
+                            endpoint_errors[err_msg] = endpoint_errors.get(err_msg, 0) + 1
+                            last_errors[ep] = err_msg
+                        else:
+                            last_errors[ep] = extra.get("body", "") or ""
 
-                for i, cls in enumerate(hist):
-                    x = x_start + i
-                    if x >= w:
-                        break
-                    style = color_for_class.get(cls, color_for_class["unknown"])
-                    stdscr.addstr(row, x, "●", style)
+                # Draw per-endpoint rows
+                row = 3
+                x_start = 45  # where the graph starts
+                graph_width = max(10, w - x_start - 1)
 
-                row += 1
-
-                # Optional one-line last info for this endpoint
-                err = last_errors.get(endpoint)
-                if err and row < h:
-                    msg = f"  last info: {err}"
-                    stdscr.addstr(row, 2, msg[:w - 3], curses.color_pair(5))
-                    row += 1
-
-            # Error summary section
-            if error_counts and row < h:
-                stdscr.addstr(row, 0, "Errors seen this session:", curses.color_pair(5))
-                row += 1
-                # Sort by count descending
-                for msg, count in sorted(
-                    error_counts.items(), key=lambda kv: kv[1], reverse=True
-                ):
+                for endpoint in endpoints:
                     if row >= h:
-                        break
-                    line = f"  [{count:4d}x] {msg}"
-                    stdscr.addstr(row, 0, line[:w - 1], curses.color_pair(5))
+                        break  # no more space on screen
+
+                    name = labels[endpoint]
+                    latest_cls = histories[endpoint][-1] if histories[endpoint] else "unknown"
+                    latest_str = latest_cls.upper()
+
+                    # Calculate % non-good (exclude UNKNOWN)
+                    st = stats[endpoint]
+                    if st["known"] > 0:
+                        pct_ng = int(round(100.0 * st["non_good"] / st["known"]))
+                        pct_str = f"{pct_ng:3d}% NG"
+                    else:
+                        pct_str = "  -  "
+
+                    # Row label: endpoint label + latest status + % non-good
+                    label = f"{name:12} [{latest_str:7}] {pct_str:8}"
+                    stdscr.addstr(row, 0, label[:x_start - 1], curses.color_pair(5))
+
+                    # History graph
+                    hist = histories[endpoint][-graph_width:]
+                    padding = graph_width - len(hist)
+                    hist = ["unknown"] * padding + hist  # pad left with unknowns
+
+                    for i, cls in enumerate(hist):
+                        x = x_start + i
+                        if x >= w:
+                            break
+                        style = color_for_class.get(cls, color_for_class["unknown"])
+                        stdscr.addstr(row, x, "●", style)
+
                     row += 1
 
-            stdscr.refresh()
+                    # Optional one-line last info for this endpoint
+                    err = last_errors.get(endpoint)
+                    if err and row < h:
+                        msg = f"  last info: {err}"
+                        stdscr.addstr(row, 2, msg[:w - 3], curses.color_pair(5))
+                        row += 1
 
-            # Handle keypress (non-blocking)
-            remaining = POLL_INTERVAL - (time.time() - start)
-            end_wait = time.time() + max(0.0, remaining)
-            while time.time() < end_wait:
-                try:
+                # Per-endpoint error summary section
+                any_errors = any(error_counts[ep] for ep in endpoints)
+                if any_errors and row < h:
+                    stdscr.addstr(row, 0, "Errors seen this session:", curses.color_pair(5))
+                    row += 1
+
+                    for ep in endpoints:
+                        ep_errors = error_counts.get(ep) or {}
+                        if not ep_errors:
+                            continue
+                        if row >= h:
+                            break
+
+                        ep_label_line = f"  {labels[ep]}:"
+                        stdscr.addstr(row, 0, ep_label_line[:w - 1], curses.color_pair(5))
+                        row += 1
+
+                        for msg, count in sorted(
+                            ep_errors.items(), key=lambda kv: kv[1], reverse=True
+                        ):
+                            if row >= h:
+                                break
+                            line = f"    [{count:4d}x] {msg}"
+                            stdscr.addstr(row, 0, line[:w - 1], curses.color_pair(5))
+                            row += 1
+
+                stdscr.refresh()
+
+                # Handle keypress (non-blocking)
+                remaining = POLL_INTERVAL - (time.time() - start)
+                end_wait = time.time() + max(0.0, remaining)
+                while time.time() < end_wait:
                     ch = stdscr.getch()
-                except KeyboardInterrupt:
-                    return
-                if ch in (ord("q"), ord("Q"), 27):  # q or ESC
-                    return
-                time.sleep(0.05)
-
+                    if ch in (ord("q"), ord("Q"), 27):  # q or ESC
+                        return
+                    time.sleep(0.05)
+        except KeyboardInterrupt:
+            # Clean exit on Ctrl-C (no traceback)
+            return
     finally:
         if executor is not None:
             executor.shutdown(wait=False)
@@ -494,16 +513,20 @@ def parse_args():
 
 def main():
     args = parse_args()
-    curses.wrapper(
-        run_dashboard,
-        args.endpoints,
-        args.token,
-        args.timeout,
-        args.insecure,
-        args.async_requests,
-        args.ping,
-        args.show_full_hostnames,
-    )
+    # Extra guard so Ctrl-C never prints a traceback
+    try:
+        curses.wrapper(
+            run_dashboard,
+            args.endpoints,
+            args.token,
+            args.timeout,
+            args.insecure,
+            args.async_requests,
+            args.ping,
+            args.show_full_hostnames,
+        )
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
