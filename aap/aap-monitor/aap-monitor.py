@@ -6,31 +6,40 @@ AAP Environment Monitor (Controller Dashboard)
 Description
 -----------
 Curses-based terminal dashboard to monitor a Red Hat Ansible Automation Platform
-(AAP) Controller environment.
+(AAP) 2.5 Controller environment (via Automation Gateway or directly).
 
 It:
 - Connects to an AAP Controller using a Bearer token.
 - Polls the Controller every few seconds.
-- Shows Controller **topology** (instances) and their health using a colored
-  GOOD/WARN/BAD/UNKNOWN scheme.
-- Shows **currently running jobs**, including:
+- Shows Controller topology (instances) and their health using a colored
+  GOOD/WARN/BAD/UNKNOWN scheme, including:
+    - Node type/state
+    - Memory
+    - Number of forks
+    - Last health check time (when available)
+    - Error reason if an instance reports errors (e.g. "Failed to connect to redis")
+- Shows the last N jobs (configurable) including:
     - Job ID
     - Name
-    - User who launched it
-    - How long it has been running (elapsed)
+    - User who launched them
+    - How long they have been running / ran for
+- Keeps recent jobs on screen even after they finish; their colour/status
+  changes as they complete. Failed jobs are shown in red.
 - Uses only Python standard library modules (suitable for typical AAP installs).
 
-Assumed API Endpoints
----------------------
-Base URL example: https://aap-controller.example.com
+Assumed API Endpoints (AAP 2.5)
+-------------------------------
+Base URL example (usually the Gateway):
 
-This script assumes a standard AAP / AWX-style API with:
+    https://<gateway server name>/
+
+Controller endpoints:
 
 - Instances (topology):
-    GET <base_url>/api/v2/instances/
+    GET /api/controller/v2/instances/
 
-- Running jobs:
-    GET <base_url>/api/v2/jobs/?status=running&order_by=-started&page_size=50
+- Recent jobs (all statuses):
+    GET /api/controller/v2/jobs/?order_by=-started&page_size=N
 
 Authentication
 --------------
@@ -38,59 +47,46 @@ The script expects a Bearer token and sends:
 
     Authorization: Bearer <YOUR_TOKEN>
 
-If your environment uses a different auth header (e.g. "Token"), you can adjust
-the AUTH_SCHEME constant below.
+If your environment uses a different auth header (e.g. "Token"), adjust
+AUTH_SCHEME below.
 
 Color / Status Scheme
 ---------------------
-Using the same color meaning as the gateway monitor:
-
-- GOOD (green)
-- WARN (yellow)
-- BAD (red)
-- UNKNOWN (cyan)
-
 Instances:
-- GOOD   -> enabled, no (or empty) "errors" field
-- WARN   -> enabled but "errors" is present/non-empty, or capacity is 0
-- BAD    -> disabled, or a fatal-looking "errors" field
-- UNKNOWN -> anything else / unexpected data
+- GOOD   (green)   -> enabled, no (or empty) "errors" field
+- WARN   (yellow)  -> enabled but "errors" is present/non-empty, or capacity is 0
+- BAD    (red)     -> disabled, or a fatal-looking "errors" field
+- UNKNOWN (cyan)   -> anything else / unexpected data
 
-Jobs:
-- Shows all jobs with status "running" returned by the API.
-- Uses the "elapsed" field if present, or falls back to "started" timestamp
-  (if available) to compute a rough elapsed time.
+Jobs (row colour):
+- GOOD   (green)   -> status in {running, successful, finished, completed}
+- BAD    (red)     -> any status containing "fail" or "error"
+- WARN / UNKNOWN   -> available if you extend mappings.
 
 Usage
 -----
-    ./aap_monitor.py \\
-        --token 'YOUR_BEARER_TOKEN' \\
-        https://aap-controller.example.com
+    ./aap_monitor.py \
+        --token 'YOUR_BEARER_TOKEN' \
+        https://gateway.example.com
 
 Options
 -------
 Positional:
-  base_url             Base URL of the AAP Controller, e.g. https://aap.example.com
+  base_url             Base URL of the AAP Gateway/Controller,
+                       e.g. https://gateway.example.com
 
 Flags:
   -t, --token          Bearer token for Authorization header.
   --timeout            Request timeout (seconds). Default: 5.
   --poll-interval      Polling interval (seconds). Default: 2.
   --insecure, -k       Skip TLS certificate verification (self-signed/lab).
-  --page-size          Max running jobs to fetch (page_size). Default: 50.
+  --page-size          How many recent jobs to fetch (and keep on screen).
+                       Default: 50 (displayed up to MAX_JOBS_DISPLAY rows).
 
 Controls
 --------
 - Press 'q' or ESC to quit the dashboard.
 - Press Ctrl-C to exit cleanly (no traceback).
-
-Notes
------
-If your AAP version uses slightly different endpoints or fields
-(e.g. alternative instances endpoint), you can tweak API paths in:
-
-    fetch_instances()
-    fetch_running_jobs()
 
 """
 
@@ -128,21 +124,27 @@ MONITOR_HOST = socket.gethostname()
 
 def classify_status_text(status):
     """
-    Map arbitrary status text to one of: good, warn, bad, unknown.
-    Reused logic from gateway monitor.
+    Map arbitrary *job* or *generic* status text to one of:
+    good, warn, bad, unknown.
     """
     if status is None:
         return "unknown"
 
     s = str(status).lower()
 
-    if s in ("good", "ok", "okay", "healthy", "green", "running"):
+    # Clearly good / healthy / running / done
+    if s in (
+        "good", "ok", "okay", "healthy", "green",
+        "running", "successful", "completed", "finished"
+    ):
         return "good"
 
+    # Warnings / degraded
     if any(word in s for word in ("warn", "degrad", "yellow")):
         return "warn"
 
-    if any(word in s for word in ("bad", "down", "error", "fail", "critical", "red")):
+    # Failures / errors
+    if any(word in s for word in ("bad", "down", "error", "fail", "failed", "critical", "red")):
         return "bad"
 
     return "unknown"
@@ -166,29 +168,28 @@ def classify_instance(instance):
     capacity = instance.get("capacity")
     node_state = instance.get("node_state")  # may exist on some versions
 
-    # Anything explicitly disabled is BAD.
+    # Explicitly disabled -> BAD
     if enabled is False:
         return "bad"
 
-    # If errors is a non-empty string/list/dict -> WARN/BAD
+    # Non-empty errors -> WARN/BAD
     if errors:
-        # If it looks very severe, treat as BAD.
         err_str = str(errors).lower()
         if any(word in err_str for word in ("unreachable", "failed", "error", "down", "offline")):
             return "bad"
         return "warn"
 
-    # If capacity is 0 but enabled and no errors: WARN (no capacity).
+    # Capacity 0 but enabled -> WARN
     if capacity == 0:
         return "warn"
 
-    # If node_state exists, hint from it.
+    # If node_state exists, use it as a hint
     if node_state:
         cls = classify_status_text(node_state)
         if cls != "unknown":
             return cls
 
-    # Enabled or missing means GOOD if nothing else complains.
+    # Enabled or unknown but no errors -> GOOD
     if enabled in (True, None):
         return "good"
 
@@ -197,13 +198,12 @@ def classify_instance(instance):
 
 def parse_iso8601(dt_str):
     """
-    Parse an ISO-8601-ish datetime string (AAP's typical format) into a datetime.
+    Parse an ISO-8601-ish datetime string into a datetime.
     Returns None on failure.
     """
     if not dt_str:
         return None
     try:
-        # Many AAP timestamps look like "2025-11-24T13:37:42.123456Z"
         if dt_str.endswith("Z"):
             dt_str = dt_str[:-1] + "+00:00"
         return datetime.fromisoformat(dt_str)
@@ -270,17 +270,19 @@ def api_get(base_url, path, token, timeout, insecure=False, query=None):
 def fetch_instances(base_url, token, timeout, insecure=False):
     """
     Fetch Controller instances (cluster topology).
-    Returns a list of instance dicts.
+
+    AAP 2.5 (via Gateway) endpoint:
+      GET /api/controller/v2/instances/
+
+    Returns (instances_list, error_str_or_None)
     """
     try:
-        data = api_get(base_url, "/api/v2/instances/", token, timeout, insecure)
-        # Typical AWX/AAP shape: { "results": [ {instance}, ... ], ... }
+        data = api_get(base_url, "/api/controller/v2/instances/", token, timeout, insecure)
         if isinstance(data, dict) and isinstance(data.get("results"), list):
             return data["results"], None
-        # If it's already a list, just return it.
         if isinstance(data, list):
             return data, None
-        return [], "Unexpected /api/v2/instances/ format"
+        return [], "Unexpected /api/controller/v2/instances/ format"
     except error.HTTPError as e:
         return [], f"HTTP {e.code} on /instances/: {e.reason}"
     except error.URLError as e:
@@ -289,22 +291,24 @@ def fetch_instances(base_url, token, timeout, insecure=False):
         return [], f"Exception on /instances/: {e}"
 
 
-def fetch_running_jobs(base_url, token, timeout, insecure=False, page_size=DEFAULT_PAGE_SIZE):
+def fetch_recent_jobs(base_url, token, timeout, insecure=False, page_size=DEFAULT_PAGE_SIZE):
     """
-    Fetch running jobs from Controller.
+    Fetch recent jobs (all statuses) from Controller.
 
-    Returns (jobs, error_message_str_or_None)
+    AAP 2.5 (via Gateway) endpoint:
+      GET /api/controller/v2/jobs/?order_by=-started&page_size=...
+
+    Returns (jobs_list, error_str_or_None)
     """
     query = {
-        "status": "running",
         "order_by": "-started",
         "page_size": page_size,
     }
     try:
-        data = api_get(base_url, "/api/v2/jobs/", token, timeout, insecure, query=query)
+        data = api_get(base_url, "/api/controller/v2/jobs/", token, timeout, insecure, query=query)
         results = data.get("results") if isinstance(data, dict) else None
         if not isinstance(results, list):
-            return [], "Unexpected /api/v2/jobs/ format"
+            return [], "Unexpected /api/controller/v2/jobs/ format"
         return results, None
     except error.HTTPError as e:
         return [], f"HTTP {e.code} on /jobs/: {e.reason}"
@@ -359,11 +363,11 @@ def run_dashboard(
                 stdscr.erase()
 
                 # ------------------------------------------------------------------
-                # Fetch data (instances + running jobs), potentially in parallel
+                # Fetch data (instances + recent jobs), in parallel
                 # ------------------------------------------------------------------
                 futures = {
                     executor.submit(fetch_instances, base_url, token, timeout, insecure): "instances",
-                    executor.submit(fetch_running_jobs, base_url, token, timeout, insecure, page_size): "jobs",
+                    executor.submit(fetch_recent_jobs, base_url, token, timeout, insecure, page_size): "jobs",
                 }
 
                 for fut in as_completed(futures):
@@ -399,25 +403,22 @@ def run_dashboard(
                     else:
                         unknown_i += 1
 
-                running_jobs = len(jobs)
+                running_jobs = sum(
+                    1 for j in jobs
+                    if str(j.get("status", "")).lower() == "running"
+                )
+                failed_jobs = sum(
+                    1 for j in jobs
+                    if classify_status_text(j.get("status")) == "bad"
+                )
+
                 summary = (
                     f"Instances: G={good_i} W={warn_i} B={bad_i} U={unknown_i}  "
-                    f"Running jobs: {running_jobs}"
+                    f"Recent jobs: {len(jobs)}  running={running_jobs}  failed={failed_jobs}"
                 )
                 stdscr.addstr(1, 0, summary[:w - 1], curses.color_pair(5))
 
-                # Legend
-                legend = "Legend: GOOD ●   WARN ●   BAD ●   UNKNOWN ●"
-                stdscr.addstr(2, 0, legend[:w - 1], curses.color_pair(5))
-                stdscr.addstr(2, len("Legend: "), "GOOD ●", color_for_class["good"])
-                off = len("Legend: GOOD ●   ")
-                stdscr.addstr(2, off, "WARN ●", color_for_class["warn"])
-                off += len("WARN ●   ")
-                stdscr.addstr(2, off, "BAD ●", color_for_class["bad"])
-                off += len("BAD ●   ")
-                stdscr.addstr(2, off, "UNKNOWN ●", color_for_class["unknown"])
-
-                row = 4
+                row = 3
 
                 # ------------------------------------------------------------------
                 # Topology section (instances)
@@ -426,55 +427,131 @@ def run_dashboard(
                     stdscr.addstr(row, 0, "Topology (instances):", curses.color_pair(5))
                     row += 1
 
-                # Determine name width dynamically
-                inst_names = [str(i.get("hostname") or i.get("node") or i.get("id") or "?")
-                              for i in instances]
+                inst_names = [
+                    str(i.get("hostname") or i.get("node") or i.get("id") or "?")
+                    for i in instances
+                ]
                 max_name_len = max((len(n) for n in inst_names), default=4)
                 name_width = max(max_name_len, 8)
 
                 for inst, name in zip(instances, inst_names):
                     if row >= h:
                         break
+
                     cls = classify_instance(inst)
                     status_str = cls.upper()
-                    # try to include node_type or node_state if present
                     node_type = inst.get("node_type") or inst.get("type") or ""
                     node_state = inst.get("node_state") or ""
-                    extra = node_type or node_state
+
+                    # First line: name, status, type/state
+                    extra_bits = []
+                    if node_type:
+                        extra_bits.append(node_type)
+                    if node_state:
+                        extra_bits.append(node_state)
+                    extra = ", ".join(extra_bits)
+
                     line = f"  {name:{name_width}} [{status_str:7}]"
                     if extra:
                         line += f"  ({extra})"
-                    stdscr.addstr(row, 0, line[:w - 1], color_for_class.get(cls, curses.color_pair(5)))
+                    stdscr.addstr(
+                        row, 0, line[:w - 1],
+                        color_for_class.get(cls, curses.color_pair(5))
+                    )
                     row += 1
+
+                    # Second line: memory / forks / last health check
+                    if row >= h:
+                        break
+
+                    memory = inst.get("memory") or inst.get("mem")
+                    forks = inst.get("forks")
+                    if forks is None:
+                        # capacity is often "number of forks" equivalent
+                        forks = inst.get("capacity")
+                    last_health = (
+                        inst.get("last_health_check")
+                        or inst.get("heartbeat")
+                        or inst.get("last_isolated_check")
+                    )
+
+                    details = []
+                    if memory is not None:
+                        details.append(f"mem={memory}")
+                    if forks is not None:
+                        details.append(f"forks={forks}")
+                    if last_health:
+                        last_str = str(last_health)
+                        if len(last_str) > 32:
+                            last_str = last_str[:29] + "..."
+                        details.append(f"last={last_str}")
+
+                    if details:
+                        det_line = "    " + "  ".join(details)
+                        stdscr.addstr(
+                            row, 0,
+                            det_line[:w - 1],
+                            color_for_class.get(cls, curses.color_pair(5)),
+                        )
+                        row += 1
+
+                    # Third line: error reason from instance.errors
+                    errors_field = inst.get("errors")
+                    if errors_field and row < h:
+                        err_str = str(errors_field)
+                        # Normalise whitespace and trim to fit
+                        err_str = " ".join(err_str.split())
+                        max_err_width = max(10, w - 8)
+                        if len(err_str) > max_err_width:
+                            err_str = err_str[: max_err_width - 3] + "..."
+                        err_line = f"    error: {err_str}"
+                        stdscr.addstr(
+                            row, 0,
+                            err_line[:w - 1],
+                            color_for_class.get(cls, curses.color_pair(5)),
+                        )
+                        row += 1
 
                 if inst_error and row < h:
-                    stdscr.addstr(row, 2, f"instances error: {inst_error}"[:w - 3], curses.color_pair(4))
+                    stdscr.addstr(
+                        row, 2,
+                        f"instances error: {inst_error}"[:w - 3],
+                        curses.color_pair(4),
+                    )
                     row += 1
 
                 # ------------------------------------------------------------------
-                # Running jobs section
+                # Recent jobs section (last N by start time)
                 # ------------------------------------------------------------------
                 if row < h:
-                    stdscr.addstr(row, 0, "Running jobs:", curses.color_pair(5))
+                    stdscr.addstr(
+                        row, 0,
+                        f"Recent jobs (last {min(page_size, MAX_JOBS_DISPLAY)} shown):",
+                        curses.color_pair(5),
+                    )
                     row += 1
 
-                # Table header
                 if row < h:
                     header_line = "  ID    Elapsed    User           Status   Name"
                     stdscr.addstr(row, 0, header_line[:w - 1], curses.color_pair(5))
                     row += 1
 
-                # Show up to MAX_JOBS_DISPLAY jobs
                 for job in jobs[:MAX_JOBS_DISPLAY]:
                     if row >= h:
                         break
 
                     jid = job.get("id")
                     status = job.get("status") or "?"
+                    status_str = str(status)
                     elapsed = job.get("elapsed")
 
-                    # if elapsed is 0 or None, try to compute from started timestamp
-                    if not elapsed:
+                    # For running jobs, elapsed may be 0; compute from started if needed
+                    try:
+                        elapsed_val = float(elapsed) if elapsed is not None else 0.0
+                    except Exception:
+                        elapsed_val = 0.0
+
+                    if elapsed is None or elapsed_val <= 0.0:
                         started = parse_iso8601(job.get("started"))
                         if started:
                             elapsed = (datetime.now(timezone.utc) - started).total_seconds()
@@ -483,29 +560,34 @@ def run_dashboard(
 
                     elapsed_str = format_elapsed(elapsed)
 
-                    # user: from summary_fields if available
-                    user = "?"
                     sf = job.get("summary_fields") or {}
-                    u = sf.get("created_by") or {}
-                    user = u.get("username") or u.get("first_name") or user
+                    created_by = sf.get("created_by") or {}
+                    user = created_by.get("username") or created_by.get("first_name") or "?"
 
-                    name = job.get("name") or job.get("job_template", "")
-                    name = str(name)
+                    name = str(job.get("name") or job.get("job_template", ""))
 
-                    cls = classify_status_text(status)
+                    cls = classify_status_text(status_str)
 
-                    line = f"  {jid:4}  {elapsed_str:9}  {user:12.12}  {status:7}  {name}"
-                    stdscr.addstr(row, 0, line[:w - 1], color_for_class.get(cls, curses.color_pair(5)))
+                    line = f"  {jid:4}  {elapsed_str:9}  {user:12.12}  {status_str:7}  {name}"
+                    stdscr.addstr(
+                        row, 0,
+                        line[:w - 1],
+                        color_for_class.get(cls, curses.color_pair(5)),
+                    )
                     row += 1
 
                 if jobs_error and row < h:
-                    stdscr.addstr(row, 2, f"jobs error: {jobs_error}"[:w - 3], curses.color_pair(4))
+                    stdscr.addstr(
+                        row, 2,
+                        f"jobs error: {jobs_error}"[:w - 3],
+                        curses.color_pair(4),
+                    )
                     row += 1
 
                 stdscr.refresh()
 
                 # ------------------------------------------------------------------
-                # Handle keypress and pacing
+                # Key handling / pacing
                 # ------------------------------------------------------------------
                 remaining = poll_interval - (time.time() - loop_start)
                 end_wait = time.time() + max(0.0, remaining)
@@ -527,11 +609,11 @@ def run_dashboard(
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="AAP Controller environment monitor (topology + running jobs)."
+        description="AAP Controller environment monitor (topology + recent jobs)."
     )
     p.add_argument(
         "base_url",
-        help="Base URL of the AAP Controller (e.g. https://aap.example.com)",
+        help="Base URL of the AAP Gateway/Controller (e.g. https://gateway.example.com)",
     )
     p.add_argument(
         "--token",
@@ -555,7 +637,7 @@ def parse_args():
         "--page-size",
         type=int,
         default=DEFAULT_PAGE_SIZE,
-        help=f"Max running jobs to request from API (default: {DEFAULT_PAGE_SIZE}).",
+        help=f"How many recent jobs to fetch (default: {DEFAULT_PAGE_SIZE}).",
     )
     p.add_argument(
         "--insecure",
@@ -579,7 +661,7 @@ def main():
             args.page_size,
         )
     except KeyboardInterrupt:
-        # Extra guard; avoid traceback on Ctrl-C.
+        # avoid traceback on Ctrl-C
         pass
 
 
