@@ -1,4 +1,61 @@
 #!/usr/bin/env python3
+"""
+AAP Gateway Health Monitor (Terminal Dashboard)
+==============================================
+
+Description
+-----------
+Simple Python 3 terminal app (curses-based) to monitor the health of
+AAP gateways and/or a load balancer.
+
+It:
+- Polls one or more endpoints every second.
+- Calls the endpoint:  <base_url>/api/gateway/v1/status/
+- Sends a Bearer token in the Authorization header.
+- Classifies status into: GOOD / WARN / BAD / UNKNOWN.
+- Displays a scrolling, colored graph of recent status for each endpoint.
+- Uses only the Python standard library (suitable for typical AAP installs).
+
+Expected API
+------------
+This script assumes the status endpoint returns JSON. It will:
+- Prefer a top-level key "status" if present.
+- Otherwise, if "services" is a list, it derives an overall status from
+  the services' "status" fields (checking for failures/warnings).
+
+Status classification rules (case-insensitive):
+- GOOD   -> "good", "ok", "okay", "healthy", "green"
+- WARN   -> any of "warn", "degrad", "yellow"
+- BAD    -> any of "bad", "down", "error", "fail", "critical", "red"
+- UNKNOWN -> anything else or missing.
+
+Usage
+-----
+    ./aap_gateway_monitor.py \\
+        --token 'YOUR_BEARER_TOKEN' \\
+        --timeout 5 \\
+        https://lb.example.com \\
+        https://gw1.example.com \\
+        https://gw2.example.com \\
+        https://gw3.example.com \\
+        https://gw4.example.com
+
+Arguments
+---------
+Positional:
+  endpoints      One or more base URLs, e.g. https://gw1.example.com
+
+Options:
+  -t, --token    Bearer token to use for Authorization.
+  --timeout      Request timeout in seconds (default: 5).
+  -k, --insecure Skip TLS certificate verification (self-signed, lab, etc.).
+
+Controls
+--------
+- Press 'q' or ESC to quit the dashboard.
+
+"""
+
 import argparse
 import json
 import time
@@ -7,8 +64,8 @@ import ssl
 from urllib import request, error
 from urllib.parse import urlparse
 
-POLL_INTERVAL = 1.0         # seconds
-HISTORY_LENGTH = 60         # how many seconds to keep in the graph
+POLL_INTERVAL = 1.0         # seconds between polls
+HISTORY_LENGTH = 60         # number of points in the graph (seconds)
 
 
 def classify_status(status):
@@ -32,13 +89,13 @@ def classify_status(status):
     return "unknown"
 
 
-def fetch_status(base_url, token, timeout=2, insecure=False):
+def fetch_status(base_url, token, timeout=5, insecure=False):
     """
-    Call <base_url>/api/gateway/ve/status with Bearer token.
+    Call <base_url>/api/gateway/v1/status/ with Bearer token.
     Returns (status_string, extra_info_dict).
     """
     base_url = base_url.rstrip("/")
-    url = f"{base_url}/api/gateway/ve/status"
+    url = f"{base_url}/api/gateway/v1/status/"
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -91,7 +148,7 @@ def short_name_from_url(u):
     return u
 
 
-def run_dashboard(stdscr, endpoints, token, insecure=False):
+def run_dashboard(stdscr, endpoints, token, timeout, insecure=False):
     curses.curs_set(0)
     stdscr.nodelay(True)
     curses.start_color()
@@ -136,7 +193,7 @@ def run_dashboard(stdscr, endpoints, token, insecure=False):
 
         # Poll endpoints
         for endpoint in endpoints:
-            status_text, extra = fetch_status(endpoint, token, insecure=insecure)
+            status_text, extra = fetch_status(endpoint, token, timeout=timeout, insecure=insecure)
             cls = classify_status(status_text)
             histories[endpoint].append(cls)
             if len(histories[endpoint]) > HISTORY_LENGTH:
@@ -214,6 +271,12 @@ def parse_args():
         help="Bearer token to use for Authorization header.",
     )
     p.add_argument(
+        "--timeout",
+        type=float,
+        default=5.0,
+        help="Request timeout in seconds (default: 5).",
+    )
+    p.add_argument(
         "--insecure",
         "-k",
         action="store_true",
@@ -224,7 +287,13 @@ def parse_args():
 
 def main():
     args = parse_args()
-    curses.wrapper(run_dashboard, args.endpoints, args.token, args.insecure)
+    curses.wrapper(
+        run_dashboard,
+        args.endpoints,
+        args.token,
+        args.timeout,
+        args.insecure,
+    )
 
 
 if __name__ == "__main__":
