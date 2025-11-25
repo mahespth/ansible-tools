@@ -1,436 +1,549 @@
 #!/usr/bin/env python3
 """
-AAP Gateway Health Monitor (Terminal Dashboard)
-==============================================
+Gateway Health Monitor for AAP
+==============================
 
 Description
 -----------
-Simple Python 3 terminal app (curses-based) to monitor the health of
-AAP gateways and/or a load balancer.
+Simple terminal-based monitor for Red Hat Ansible Automation Platform (AAP)
+Gateways and Load Balancer endpoints.
 
-It:
-- Polls one or more endpoints every second.
-- By default calls:  <base_url>/api/gateway/v1/status/
-- Optionally calls:  <base_url>/api/gateway/v1/ping/ instead (with --ping).
-- Sends a Bearer token in the Authorization header.
-- Classifies status into: GOOD / WARN / BAD / UNKNOWN.
-- Displays a scrolling, colored graph of recent status for each endpoint.
-- Tracks and displays the % of requests that are NOT GOOD, ignoring UNKNOWN.
-- Tracks how many times each distinct error has occurred per endpoint and
-  shows an error section grouped by endpoint label.
-- Shows in the header which host the monitor itself is running on.
-- Uses only the Python standard library (suitable for typical AAP installs).
-- Can optionally fetch all endpoints concurrently using threads.
-- By default shows a truncated hostname:
-    - FQDN like gw1.example.com -> "gw1"
-    - IP addresses like 10.0.0.1 are shown in full.
-  Use --show-full-hostnames to show the full hostname (including domain).
-
-Controls
+Features
 --------
-- Press 'q' or ESC to quit the dashboard.
-- Press Ctrl-C to exit cleanly (no traceback).
+- Polls one or more AAP Gateway base URLs and checks either:
+    * /api/gateway/v1/status/
+    * /api/gateway/v1/ping/
+- Uses a Bearer token for authentication.
+- Polls endpoints at a configurable interval (default: 1 second).
+- Displays a rolling ASCII "graph" of health per endpoint.
+- Truncates FQDNs by default so domains are hidden (first label only).
+  A flag allows the full hostname to be shown instead.
+- Tracks, per endpoint:
+    * Total requests
+    * Percentage of requests that are NOT good (excluding unknown)
+    * Per-error message counters.
+- Requests can be executed concurrently with a flag using a thread pool.
+- Clean exit on Ctrl-C.
+- Status line shows the time and the hostname the monitor is running on.
+- Logging of errors:
+    * By default logs to a local file including time, hostname and error text.
+    * Optional flag to log errors to syslog instead of a file.
+
+Requirements
+------------
+- Python 3 standard library only (no external dependencies).
+- Designed to work on typical AAP execution environments.
+
+Usage
+-----
+    gateway-monitor.py --token MYTOKEN https://gw1.example.com https://gw2.example.com
+
+Key flags
+---------
+    --token TOKEN           Bearer token to use for Authorization header (required).
+    --interval SECONDS      Poll interval (default: 1.0).
+    --timeout SECONDS       HTTP timeout per request (default: 5.0).
+    --ping                  Use /api/gateway/v1/ping/ instead of /api/gateway/v1/status/.
+    --async                 Fetch endpoints concurrently using a thread pool.
+    --show-full             Show full FQDN / URL instead of truncated hostname.
+    --insecure              Skip TLS certificate verification.
+    --log-file PATH         Log errors to this file (default: ./gateway-monitor.log).
+    --syslog                Log errors to syslog instead of file logging.
 
 """
 
 import argparse
 import json
-import time
-import curses
-import ssl
+import logging
+import logging.handlers
+import shutil
 import socket
-from urllib import request, error
+import ssl
+import sys
+import time
+from collections import defaultdict
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+from urllib import error, request
 from urllib.parse import urlparse
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-POLL_INTERVAL = 1.0         # seconds between polls
-HISTORY_LENGTH = 60         # number of points kept per endpoint
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
 
-# Host running the monitor
-MONITOR_HOST = socket.gethostname()
+HOSTNAME = socket.gethostname()
+LOGGER: Optional[logging.Logger] = None
 
 
-def classify_status(status):
+class HostnameFilter(logging.Filter):
+    """Inject the hostname into log records as `%(hostname)s`."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.hostname = HOSTNAME
+        return True
+
+
+def setup_logger(log_file: Optional[str], use_syslog: bool) -> logging.Logger:
     """
-    Map arbitrary status text to one of: good, warn, bad, unknown.
+    Configure a process-wide logger.
+
+    If use_syslog is True, logs to syslog instead of a file.
+    If use_syslog is False, logs to log_file (default path if None).
     """
-    if status is None:
-        return "unknown"
+    logger = logging.getLogger("gateway-monitor")
+    logger.setLevel(logging.INFO)
 
-    s = str(status).lower()
+    # Prevent duplicate handlers if called more than once
+    if logger.handlers:
+        return logger
 
-    if s in ("good", "ok", "okay", "healthy", "green"):
-        return "good"
-
-    if any(word in s for word in ("warn", "degrad", "yellow")):
-        return "warn"
-
-    if any(word in s for word in ("bad", "down", "error", "fail", "critical", "red")):
-        return "bad"
-
-    return "unknown"
-
-
-def fetch_status(base_url, token, timeout=5, insecure=False, use_ping=False):
-    """
-    Call the appropriate endpoint with Bearer token.
-
-    - If use_ping is False:
-        <base_url>/api/gateway/v1/status/
-        Expects JSON and derives an overall status.
-    - If use_ping is True:
-        <base_url>/api/gateway/v1/ping/
-        Treats any successful call as "good" and returns body in extra_info.
-    """
-    base_url = base_url.rstrip("/")
-    if use_ping:
-        url = f"{base_url}/api/gateway/v1/ping/"
+    if use_syslog:
+        try:
+            handler = logging.handlers.SysLogHandler(address="/dev/log")
+        except Exception:
+            # Fallback to UDP localhost:514 if /dev/log is not available
+            handler = logging.handlers.SysLogHandler(address=("localhost", 514))
     else:
-        url = f"{base_url}/api/gateway/v1/status/"
+        if not log_file:
+            log_file = "gateway-monitor.log"
+        handler = logging.FileHandler(log_file)
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json" if not use_ping else "*/*",
-    }
+    fmt = logging.Formatter(
+        "%(asctime)s %(hostname)s gateway-monitor[%(process)d]: "
+        "%(levelname)s: %(message)s"
+    )
+    handler.setFormatter(fmt)
+    handler.addFilter(HostnameFilter())
+    logger.addHandler(handler)
 
+    return logger
+
+
+def log_error(msg: str) -> None:
+    """Log an error message if logging is configured."""
+    if LOGGER is not None:
+        LOGGER.error(msg)
+
+
+# ---------------------------------------------------------------------------
+# HTTP helpers
+# ---------------------------------------------------------------------------
+
+def build_ssl_context(insecure: bool) -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     if insecure:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
+
+def make_request(
+    base_url: str,
+    path: str,
+    token: str,
+    timeout: float,
+    insecure: bool,
+) -> Tuple[int, str]:
+    """
+    Make a GET request to base_url + path.
+
+    Returns (status_code, body_text).
+    Raises HTTPError/URLError for network-level issues.
+    """
+    base = base_url.rstrip("/")
+    url = f"{base}{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    ctx = build_ssl_context(insecure)
     req = request.Request(url, headers=headers)
+    with request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        code = resp.getcode()
+        body = resp.read().decode("utf-8", errors="replace")
+    return code, body
 
+
+def interpret_status_response(body: str) -> str:
+    """
+    Interpret the JSON body from /api/gateway/v1/status/ and return
+    'good', 'bad' or 'unknown'.
+    """
     try:
-        with request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return "unknown"
 
-            if use_ping:
-                extra = {"body": raw}
-                overall = "good"
-                return overall, extra
+    # Heuristics based on a typical gateway status payload that has:
+    # {
+    #   "services": [
+    #       {"name": "...", "status": "good"},
+    #       {"name": "...", "status": "bad"},
+    #       ...
+    #    ],
+    #   "status": "good"
+    # }
+    if isinstance(data, dict):
+        overall = data.get("status")
+        if isinstance(overall, str):
+            s = overall.lower()
+            if s == "good":
+                return "good"
+            if s in ("bad", "error", "degraded"):
+                return "bad"
+        services = data.get("services")
+        if isinstance(services, list) and services:
+            bad_found = False
+            good_found = False
+            for svc in services:
+                if not isinstance(svc, dict):
+                    continue
+                st = str(svc.get("status", "")).lower()
+                if st == "good":
+                    good_found = True
+                elif st:
+                    bad_found = True
+            if bad_found:
+                return "bad"
+            if good_found:
+                return "good"
 
-            data = json.loads(raw)
+    return "unknown"
 
-            overall = data.get("status")
-            if not overall and isinstance(data.get("services"), list):
-                statuses = [str(s.get("status", "")).lower()
-                            for s in data["services"]]
-                if any("down" in s or "fail" in s or "error" in s for s in statuses):
-                    overall = "bad"
-                elif any("warn" in s or "degrad" in s for s in statuses):
-                    overall = "warn"
-                else:
-                    overall = "good"
 
-            return overall, data
+def check_endpoint(
+    endpoint: str,
+    token: str,
+    timeout: float,
+    insecure: bool,
+    use_ping: bool,
+) -> Tuple[str, Optional[str]]:
+    """
+    Check the gateway endpoint.
 
+    Returns (status, error_message):
+      - status in {'good', 'bad', 'unknown'}
+      - error_message is None on success, or a string describing the error
+        (used for per-endpoint error counters and logging).
+    """
+    path = "/api/gateway/v1/ping/" if use_ping else "/api/gateway/v1/status/"
+    try:
+        code, body = make_request(endpoint, path, token, timeout, insecure)
     except error.HTTPError as e:
-        return f"HTTP {e.code}", {"error": f"HTTP {e.code}: {e.reason}"}
+        msg = f"HTTP {e.code} on {endpoint}{path}: {e.reason}"
+        log_error(msg)
+        return "bad", msg
     except error.URLError as e:
-        return "down", {"error": f"URL error: {e.reason}"}
+        msg = f"URL error on {endpoint}{path}: {e.reason}"
+        log_error(msg)
+        return "bad", msg
     except Exception as e:
-        return "down", {"error": f"Exception: {e}"}
+        msg = f"Exception on {endpoint}{path}: {type(e).__name__}: {e}"
+        log_error(msg)
+        return "bad", msg
+
+    if use_ping:
+        # For ping, treat 2xx as good, everything else bad
+        if 200 <= code < 300:
+            return "good", None
+        msg = f"Ping returned HTTP {code} on {endpoint}{path}"
+        log_error(msg)
+        return "bad", msg
+    else:
+        # Interpret JSON status response
+        status = interpret_status_response(body)
+        if status == "unknown":
+            msg = f"Unknown status response from {endpoint}{path}"
+            log_error(msg)
+            return status, msg
+        return status, None
 
 
-def hostname_from_url(u):
-    try:
-        parsed = urlparse(u)
-        if parsed.hostname:
-            return parsed.hostname
-    except Exception:
-        pass
-    return u
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+
+RESET = "\033[0m"
+COLOR_GOOD = "\033[32m"      # green
+COLOR_BAD = "\033[31m"       # red
+COLOR_UNKNOWN = "\033[33m"   # yellow
+COLOR_LABEL = "\033[36m"     # cyan for labels
+COLOR_HEADER = "\033[37m"    # white/grey
 
 
-def truncate_hostname(host):
+def status_to_char_and_color(status: str) -> Tuple[str, str]:
+    if status == "good":
+        return ".", COLOR_GOOD
+    if status == "bad":
+        return "x", COLOR_BAD
+    if status == "unknown":
+        return "?", COLOR_UNKNOWN
+    return " ", ""
+
+
+def shorten_endpoint_name(endpoint: str, show_full: bool) -> str:
     """
-    Truncate a FQDN to just the host part; keep IPs as-is.
+    Produce a short display name for an endpoint.
+
+    By default, truncates FQDNs so the domain is hidden:
+      - https://gw1.example.com -> gw1
+    If show_full is True, returns the host / netloc instead.
     """
-    if not host:
+    parsed = urlparse(endpoint)
+    host = parsed.netloc or parsed.path or endpoint
+    if show_full:
         return host
 
-    parts = host.split(".")
-
-    # IPv4-ish: all numeric parts
-    if all(p.isdigit() for p in parts if p):
-        return host
-
+    # Truncate FQDN: take just the first label
     if "." in host:
-        return host.split(".", 1)[0]
+        return host.split(".")[0]
     return host
 
 
-def run_dashboard(
-    stdscr,
-    endpoints,
-    token,
-    timeout,
-    insecure=False,
-    async_requests=False,
-    use_ping=False,
-    show_full_hostnames=False,
-):
-    curses.curs_set(0)
-    stdscr.nodelay(True)
-    curses.start_color()
+def clear_screen() -> None:
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
 
-    curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)   # good
-    curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)  # warn
-    curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)     # bad
-    curses.init_pair(4, curses.COLOR_CYAN, curses.COLOR_BLACK)    # unknown
-    curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_BLACK)   # text
 
-    color_for_class = {
-        "good": curses.color_pair(1),
-        "warn": curses.color_pair(2),
-        "bad": curses.color_pair(3),
-        "unknown": curses.color_pair(4),
+def format_bad_percent(stats: Dict[str, int]) -> str:
+    """
+    Calculate the percentage of non-good requests excluding unknown.
+    stats keys: 'good', 'bad', 'unknown'.
+    """
+    good = stats.get("good", 0)
+    bad = stats.get("bad", 0)
+    unknown = stats.get("unknown", 0)
+    denom = good + bad  # explicitly exclude unknown
+    if denom == 0:
+        return "0.0%"
+    pct = (bad / denom) * 100.0
+    return f"{pct:4.1f}%"
+
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+def monitor_gateways(args: argparse.Namespace) -> None:
+    global LOGGER
+
+    LOGGER = setup_logger(args.log_file, args.syslog)
+
+    endpoints: List[str] = args.endpoints
+    token = args.token
+    timeout = args.timeout
+    insecure = args.insecure
+    use_ping = args.ping
+    interval = args.interval
+    async_requests = args.async_requests
+
+    # Per-endpoint history and stats
+    histories: Dict[str, List[str]] = {ep: [] for ep in endpoints}
+    stats: Dict[str, Dict[str, int]] = {
+        ep: {"good": 0, "bad": 0, "unknown": 0} for ep in endpoints
+    }
+    error_counts: Dict[str, Dict[str, int]] = {
+        ep: defaultdict(int) for ep in endpoints
     }
 
-    # Histories and stats
-    histories = {e: [] for e in endpoints}
-    last_errors = {e: "" for e in endpoints}
-    stats = {e: {"non_good": 0, "known": 0} for e in endpoints}
-    error_counts = {e: {} for e in endpoints}
+    # Precompute display names (can be recomputed if needed)
+    display_names: Dict[str, str] = {
+        ep: shorten_endpoint_name(ep, args.show_full) for ep in endpoints
+    }
 
-    # Labels (hostnames) and dynamic name width
-    labels = {}
-    for ep in endpoints:
-        host = hostname_from_url(ep)
-        labels[ep] = host if show_full_hostnames else truncate_hostname(host)
+    monitor_host = HOSTNAME
 
-    max_name_len = max((len(n) for n in labels.values()), default=4)
-    name_width = max(max_name_len, 4)
-
-    executor = ThreadPoolExecutor(max_workers=len(endpoints)) if async_requests else None
+    executor: Optional[ThreadPoolExecutor] = None    # type: ignore[type-arg]
+    if async_requests:
+        executor = ThreadPoolExecutor(max_workers=len(endpoints))
 
     try:
-        try:
-            while True:
-                start = time.time()
-                h, w = stdscr.getmaxyx()
-                stdscr.erase()
+        while True:
+            term_size = shutil.get_terminal_size(fallback=(80, 24))
+            width = term_size.columns
 
-                # Header
-                mode_str = "PING" if use_ping else "STATUS"
-                host_mode_str = "FULL" if show_full_hostnames else "TRUNC"
-                title = f"AAP Gateway Health Monitor [{mode_str} | {host_mode_str}] (press 'q' to quit)"
-                now = time.strftime("%Y-%m-%d %H:%M:%S")
-                header = f"{title}  {now}  host:{MONITOR_HOST}"
-                stdscr.addstr(0, 0, header[:w - 1], curses.color_pair(5))
+            label_width = max((len(name) for name in display_names.values()), default=8)
+            label_width = max(label_width, 8)
+            # Leave room for " | " and at least 10 chars of graph plus stats
+            history_width = max(10, width - label_width - 20)
 
-                # Legend
-                legend = "Legend: GOOD ●   WARN ●   BAD ●   UNKNOWN ●   %NG = non-good (excl. UNKNOWN)"
-                stdscr.addstr(1, 0, legend[:w - 1], curses.color_pair(5))
-                stdscr.addstr(1, len("Legend: "), "GOOD ●", color_for_class["good"])
-                off = len("Legend: GOOD ●   ")
-                stdscr.addstr(1, off, "WARN ●", color_for_class["warn"])
-                off += len("WARN ●   ")
-                stdscr.addstr(1, off, "BAD ●", color_for_class["bad"])
-                off += len("BAD ●   ")
-                stdscr.addstr(1, off, "UNKNOWN ●", color_for_class["unknown"])
+            # Fetch statuses
+            results: Dict[str, Tuple[str, Optional[str]]] = {}
 
-                # Determine dynamic graph start and width based on name_width
-                # label = f"{name:{name_width}} [{status:7}] {pct:8}"
-                label_width = name_width + 19
-                x_start = label_width + 2
-                # Graph width limited by screen width and history length
-                graph_width = max(10, min(HISTORY_LENGTH, max(0, w - x_start - 1)))
+            if async_requests and executor is not None:
+                future_map = {
+                    executor.submit(
+                        check_endpoint, ep, token, timeout, insecure, use_ping
+                    ): ep
+                    for ep in endpoints
+                }
+                for fut in as_completed(future_map):
+                    ep = future_map[fut]
+                    try:
+                        status, err = fut.result()
+                    except Exception as e:
+                        msg = f"Exception in worker for {ep}: {type(e).__name__}: {e}"
+                        log_error(msg)
+                        status, err = "bad", msg
+                    results[ep] = (status, err)
+            else:
+                for ep in endpoints:
+                    status, err = check_endpoint(ep, token, timeout, insecure, use_ping)
+                    results[ep] = (status, err)
 
-                # Poll endpoints
-                if async_requests and executor is not None:
-                    future_to_ep = {
-                        executor.submit(fetch_status, ep, token, timeout, insecure, use_ping): ep
-                        for ep in endpoints
-                    }
-                    for fut in as_completed(future_to_ep):
-                        ep = future_to_ep[fut]
-                        try:
-                            status_text, extra = fut.result()
-                        except Exception as e:
-                            status_text, extra = "down", {"error": f"Exception: {e}"}
+            # Update histories and stats
+            for ep, (status, err) in results.items():
+                # keep history length bounded
+                history = histories[ep]
+                history.append(status)
+                if len(history) > history_width:
+                    # Trim oldest entries
+                    histories[ep] = history[-history_width:]
 
-                        cls = classify_status(status_text)
-                        histories[ep].append(cls)
-                        if len(histories[ep]) > HISTORY_LENGTH:
-                            histories[ep] = histories[ep][-HISTORY_LENGTH:]
+                if status not in ("good", "bad", "unknown"):
+                    status = "unknown"
+                stats[ep][status] += 1
 
-                        if cls != "unknown":
-                            stats[ep]["known"] += 1
-                            if cls != "good":
-                                stats[ep]["non_good"] += 1
+                if err:
+                    error_counts[ep][err] += 1
 
-                        err_msg = extra.get("error")
-                        if err_msg:
-                            endpoint_errors = error_counts.setdefault(ep, {})
-                            endpoint_errors[err_msg] = endpoint_errors.get(err_msg, 0) + 1
-                            last_errors[ep] = err_msg
-                        else:
-                            last_errors[ep] = extra.get("body", "") or ""
-                else:
-                    for ep in endpoints:
-                        status_text, extra = fetch_status(
-                            ep, token, timeout=timeout, insecure=insecure, use_ping=use_ping
-                        )
-                        cls = classify_status(status_text)
-                        histories[ep].append(cls)
-                        if len(histories[ep]) > HISTORY_LENGTH:
-                            histories[ep] = histories[ep][-HISTORY_LENGTH:]
+            # Render
+            clear_screen()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            header = f"{COLOR_HEADER}Gateway Monitor  {now}  host:{monitor_host}{RESET}"
+            print(header)
+            mode_str = "PING" if use_ping else "STATUS"
+            mode_info = f"Mode: {mode_str}  Interval: {interval:.1f}s  Timeout: {timeout:.1f}s"
+            print(COLOR_HEADER + mode_info + RESET)
+            print()
 
-                        if cls != "unknown":
-                            stats[ep]["known"] += 1
-                            if cls != "good":
-                                stats[ep]["non_good"] += 1
+            # Per-endpoint rows
+            for ep in endpoints:
+                name = display_names[ep]
+                history = histories[ep]
+                bad_pct = format_bad_percent(stats[ep])
 
-                        err_msg = extra.get("error")
-                        if err_msg:
-                            endpoint_errors = error_counts.setdefault(ep, {})
-                            endpoint_errors[err_msg] = endpoint_errors.get(err_msg, 0) + 1
-                            last_errors[ep] = err_msg
-                        else:
-                            last_errors[ep] = extra.get("body", "") or ""
-
-                # Draw per-endpoint rows
-                row = 3
-
-                for endpoint in endpoints:
-                    if row >= h:
-                        break
-
-                    name = labels[endpoint]
-                    latest_cls = histories[endpoint][-1] if histories[endpoint] else "unknown"
-                    latest_str = latest_cls.upper()
-
-                    st = stats[endpoint]
-                    if st["known"] > 0:
-                        pct_ng = int(round(100.0 * st["non_good"] / st["known"]))
-                        pct_str = f"{pct_ng:3d}% NG"
+                label = f"{COLOR_LABEL}{name.ljust(label_width)}{RESET}"
+                graph_chars = []
+                for st in history[-history_width:]:
+                    ch, color = status_to_char_and_color(st)
+                    if color:
+                        graph_chars.append(f"{color}{ch}{RESET}")
                     else:
-                        pct_str = "  -  "
+                        graph_chars.append(ch)
+                graph_str = "".join(graph_chars)
 
-                    label = f"{name:{name_width}} [{latest_str:7}] {pct_str:8}"
-                    stdscr.addstr(row, 0, label[:x_start - 1], curses.color_pair(5))
+                line = f"{label} | {graph_str}"
+                print(line)
 
-                    # History graph – NO LEFT PADDING WITH UNKNOWN
-                    hist = histories[endpoint][-graph_width:]
-                    for i, cls in enumerate(hist):
-                        x = x_start + i
-                        if x >= w:
-                            break
-                        style = color_for_class.get(cls, color_for_class["unknown"])
-                        stdscr.addstr(row, x, "●", style)
+                # Stats line
+                total = sum(stats[ep].values())
+                detail = (
+                    f"{' ' * (label_width + 3)}"
+                    f"good={stats[ep]['good']} "
+                    f"bad={stats[ep]['bad']} "
+                    f"unknown={stats[ep]['unknown']} "
+                    f"total={total} "
+                    f"not_good%={bad_pct}"
+                )
+                print(COLOR_HEADER + detail + RESET)
 
-                    row += 1
+                print()
 
-                    err = last_errors.get(endpoint)
-                    if err and row < h:
-                        msg = f"  last info: {err}"
-                        stdscr.addstr(row, 2, msg[:w - 3], curses.color_pair(5))
-                        row += 1
+            # Error summary
+            any_errors = any(error_counts[ep] for ep in endpoints)
+            if any_errors:
+                print(COLOR_HEADER + "Errors:" + RESET)
+                for ep in endpoints:
+                    ep_errors = error_counts[ep]
+                    if not ep_errors:
+                        continue
+                    name = display_names[ep]
+                    print(f"{COLOR_LABEL}{name}{RESET}:")
+                    for msg, count in ep_errors.items():
+                        print(f"  {count}x  {msg}")
+                    print()
 
-                # Per-endpoint error summary
-                any_errors = any(error_counts[ep] for ep in endpoints)
-                if any_errors and row < h:
-                    stdscr.addstr(row, 0, "Errors seen this session:", curses.color_pair(5))
-                    row += 1
+            # Sleep until next interval
+            time.sleep(interval)
 
-                    for ep in endpoints:
-                        ep_errors = error_counts.get(ep) or {}
-                        if not ep_errors:
-                            continue
-                        if row >= h:
-                            break
-
-                        ep_label_line = f"  {labels[ep]}:"
-                        stdscr.addstr(row, 0, ep_label_line[:w - 1], curses.color_pair(5))
-                        row += 1
-
-                        for msg, count in sorted(
-                            ep_errors.items(), key=lambda kv: kv[1], reverse=True
-                        ):
-                            if row >= h:
-                                break
-                            line = f"    [{count:4d}x] {msg}"
-                            stdscr.addstr(row, 0, line[:w - 1], curses.color_pair(5))
-                            row += 1
-
-                stdscr.refresh()
-
-                # Handle keypress
-                remaining = POLL_INTERVAL - (time.time() - start)
-                end_wait = time.time() + max(0.0, remaining)
-                while time.time() < end_wait:
-                    ch = stdscr.getch()
-                    if ch in (ord("q"), ord("Q"), 27):  # q or ESC
-                        return
-                    time.sleep(0.05)
-        except KeyboardInterrupt:
-            return
+    except KeyboardInterrupt:
+        # Clean exit on Ctrl-C
+        print("\nExiting gateway monitor...")
     finally:
         if executor is not None:
             executor.shutdown(wait=False)
 
 
-def parse_args():
-    p = argparse.ArgumentParser(
-        description="Simple AAP gateway health monitor (terminal dashboard)."
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Monitor AAP gateway health via /api/gateway/v1/status/ or /ping/."
     )
-    p.add_argument(
+    parser.add_argument(
         "endpoints",
         nargs="+",
-        help="Base URLs of gateways/LB (e.g. https://gw1.example.com)",
+        help="Gateway base URLs, e.g. https://gw1.example.com",
     )
-    p.add_argument(
+    parser.add_argument(
         "--token",
-        "-t",
         required=True,
-        help="Bearer token to use for Authorization header.",
+        help="Bearer token used for Authorization header.",
     )
-    p.add_argument(
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=1.0,
+        help="Polling interval in seconds (default: 1.0).",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=5.0,
-        help="Request timeout in seconds (default: 5).",
+        help="HTTP request timeout in seconds (default: 5.0).",
     )
-    p.add_argument(
-        "--async-requests",
-        action="store_true",
-        help="Fetch statuses concurrently using worker threads.",
-    )
-    p.add_argument(
+    parser.add_argument(
         "--ping",
         action="store_true",
         help="Use /api/gateway/v1/ping/ instead of /api/gateway/v1/status/.",
     )
-    p.add_argument(
-        "--show-full-hostnames",
+    parser.add_argument(
+        "--async",
+        dest="async_requests",
         action="store_true",
-        help="Display full hostnames (including domain) instead of truncated hostnames.",
+        help="Fetch endpoints concurrently using a thread pool.",
     )
-    p.add_argument(
+    parser.add_argument(
+        "--show-full",
+        action="store_true",
+        help="Show full hostname/FQDN instead of truncated host label.",
+    )
+    parser.add_argument(
         "--insecure",
-        "-k",
         action="store_true",
-        help="Skip TLS certificate verification.",
+        help="Skip TLS certificate verification (use with caution).",
     )
-    return p.parse_args()
+    parser.add_argument(
+        "--log-file",
+        default="gateway-monitor.log",
+        help="Log errors to this file (default: ./gateway-monitor.log). "
+             "Ignored if --syslog is set.",
+    )
+    parser.add_argument(
+        "--syslog",
+        action="store_true",
+        help="Log errors to syslog instead of a file.",
+    )
+    return parser.parse_args(argv)
 
 
-def main():
+def main() -> None:
     args = parse_args()
-    try:
-        curses.wrapper(
-            run_dashboard,
-            args.endpoints,
-            args.token,
-            args.timeout,
-            args.insecure,
-            args.async_requests,
-            args.ping,
-            args.show_full_hostnames,
-        )
-    except KeyboardInterrupt:
-        pass
+    monitor_gateways(args)
 
 
 if __name__ == "__main__":
