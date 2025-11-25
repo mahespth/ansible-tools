@@ -20,9 +20,11 @@ It:
     - Error reason if an instance reports errors (e.g. "Failed to connect to redis")
 - Shows the last N jobs (configurable) including:
     - Job ID
-    - Name
+    - Age since start (s/m/h/d)
+    - Elapsed runtime
     - User who launched them
-    - How long they have been running / ran for
+    - Status
+    - Name
 - Keeps recent jobs on screen even after they finish; their colour/status
   changes as they complete:
     - Running jobs: highlighted with reverse video.
@@ -64,12 +66,6 @@ The script expects a Bearer token and sends:
 
 If your environment uses a different auth header (e.g. "Token"), adjust
 AUTH_SCHEME below.
-
-Usage
------
-    ./aap_monitor.py \
-        --token 'YOUR_BEARER_TOKEN' \
-        https://gateway.example.com
 
 Controls
 --------
@@ -220,6 +216,33 @@ def format_elapsed(seconds):
     m = (seconds % 3600) // 60
     s = seconds % 60
     return f"{h:d}:{m:02d}:{s:02d}"
+
+
+def format_age_from_start(started_dt):
+    """
+    Format how long ago 'started_dt' was, relative to now (UTC), as:
+      - < 60s      -> 'Ns'
+      - < 99 mins  -> 'Nm'
+      - < 24h      -> 'Nh'
+      - otherwise  -> 'Nd'
+    """
+    if not started_dt:
+        return "--"
+    delta = datetime.now(timezone.utc) - started_dt
+    secs = int(delta.total_seconds())
+    if secs < 0:
+        secs = 0
+
+    if secs < 60:
+        return f"{secs}s"
+    mins = secs // 60
+    if mins < 99:
+        return f"{mins}m"
+    hours = secs // 3600
+    if hours < 24:
+        return f"{hours}h"
+    days = secs // 86400
+    return f"{days}d"
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +454,6 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
     q or ESC returns to caller.
     Running jobs auto-refresh every 5 seconds.
     """
-    # Use a small timeout in getch to allow periodic refresh
     stdscr.timeout(200)  # 200 ms
 
     scroll = 0
@@ -444,13 +466,12 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
     try:
         while True:
             now = time.time()
-            # Decide whether to refresh
             running = False
             if job and isinstance(job, dict):
                 status = str(job.get("status", "")).lower()
                 running = (status == "running")
 
-            refresh_interval = 5.0 if running else 60.0  # non-running: refresh occasionally
+            refresh_interval = 5.0 if running else 60.0
 
             if now - last_fetch >= refresh_interval or job is None:
                 job, job_err = fetch_job_detail(
@@ -460,7 +481,6 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
                     base_url, token, timeout, insecure, job_id
                 )
                 last_fetch = now
-                # Reset scroll if new content appears
                 scroll = min(scroll, max(0, len(stdout_text.splitlines()) - 1))
 
             h, w = stdscr.getmaxyx()
@@ -509,6 +529,7 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
                         elapsed = None
 
                 elapsed_str = format_elapsed(elapsed)
+                age_str = format_age_from_start(started_dt) if started_dt else "--"
 
                 cls = classify_status_text(status)
                 base_style = curses.color_pair(5)
@@ -537,10 +558,13 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
                     base_style,
                 )
                 row += 1
+                started_line = f"Started:  {started_raw or '-'}"
+                if started_dt:
+                    started_line += f"  ({age_str} ago)"
                 stdscr.addstr(
                     row,
                     0,
-                    f"Started:  {started_raw or '-'}"[: w - 1],
+                    started_line[: w - 1],
                     base_style,
                 )
                 row += 1
@@ -612,10 +636,8 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
                 scroll = max(0, scroll - max_lines)
             elif ch == curses.KEY_NPAGE:  # PgDn
                 scroll = min(max_scroll, scroll + max_lines)
-            # Everything else: ignore; loop continues, refresh timer handled above
 
     finally:
-        # return to non-blocking for main dashboard
         stdscr.timeout(-1)
         stdscr.nodelay(True)
 
@@ -770,7 +792,6 @@ def run_dashboard(
                     memory = inst.get("memory") or inst.get("mem")
                     forks = inst.get("forks")
                     if forks is None:
-                        # capacity is often "number of forks" equivalent
                         forks = inst.get("capacity")
                     last_health = (
                         inst.get("last_health_check")
@@ -802,7 +823,6 @@ def run_dashboard(
                     errors_field = inst.get("errors")
                     if errors_field and row < h:
                         err_str = str(errors_field)
-                        # Normalise whitespace and trim to fit
                         err_str = " ".join(err_str.split())
                         max_err_width = max(10, w - 8)
                         if len(err_str) > max_err_width:
@@ -835,11 +855,11 @@ def run_dashboard(
                     row += 1
 
                 if row < h:
-                    header_line = "  ID    Elapsed    User           Status   Name"
+                    # New column "Start" (age since start)
+                    header_line = "  ID    Elapsed  Start  User           Status   Name"
                     stdscr.addstr(row, 0, header_line[:w - 1], curses.color_pair(5))
                     row += 1
 
-                # Sort jobs by integer ID descending so newest IDs are first
                 def job_sort_key(j):
                     try:
                         return int(j.get("id", 0))
@@ -858,6 +878,9 @@ def run_dashboard(
                     status_lower = status_str.lower()
                     elapsed = job.get("elapsed")
 
+                    started_dt = parse_iso8601(job.get("started"))
+                    age_str = format_age_from_start(started_dt) if started_dt else "--"
+
                     # For running jobs, elapsed may be 0; compute from started if needed
                     try:
                         elapsed_val = float(elapsed) if elapsed is not None else 0.0
@@ -865,9 +888,8 @@ def run_dashboard(
                         elapsed_val = 0.0
 
                     if elapsed is None or elapsed_val <= 0.0:
-                        started = parse_iso8601(job.get("started"))
-                        if started:
-                            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+                        if started_dt:
+                            elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
                         else:
                             elapsed = None
 
@@ -882,7 +904,6 @@ def run_dashboard(
                     cls = classify_status_text(status_str)
                     base_style = color_for_class.get(cls, curses.color_pair(5))
 
-                    # Style tweaks for jobs:
                     if status_lower == "running":
                         style = curses.color_pair(1) | curses.A_REVERSE
                     elif status_lower in ("successful", "completed", "finished"):
@@ -892,7 +913,10 @@ def run_dashboard(
                     else:
                         style = base_style
 
-                    line = f"  {jid:4}  {elapsed_str:9}  {user:12.12}  {status_str:7}  {name}"
+                    line = (
+                        f"  {jid:4}  {elapsed_str:9}  {age_str:5}  "
+                        f"{user:12.12}  {status_str:7}  {name}"
+                    )
                     stdscr.addstr(
                         row, 0,
                         line[:w - 1],
@@ -923,11 +947,9 @@ def run_dashboard(
                         job_id = prompt_for_job_id(stdscr)
                         if job_id is not None:
                             job_view(stdscr, base_url, token, timeout, insecure, job_id)
-                            # after job_view returns, redraw dashboard immediately
                             break
                     time.sleep(0.05)
         except KeyboardInterrupt:
-            # clean exit on Ctrl-C
             return
     finally:
         executor.shutdown(wait=False)
@@ -991,7 +1013,6 @@ def main():
             args.page_size,
         )
     except KeyboardInterrupt:
-        # avoid traceback on Ctrl-C
         pass
 
 
