@@ -35,9 +35,8 @@ It:
     - Use Up/Down/PgUp/PgDn to scroll through jobs.
     - The selected job is marked with '>'.
     - Press 'v' to view the selected job.
-    - If no selection has been made, 'v' prompts for a job ID as before.
+    - If no selection has been made, 'v' prompts for a job ID.
 - Job detail view:
-    - Press 'v' in the main view, enter job ID OR select a job and press 'v'.
     - Shows job metadata and scrollable stdout.
     - q or ESC returns to main dashboard.
     - If the job is running, detail view auto-refreshes every 5 seconds.
@@ -444,7 +443,7 @@ def prompt_for_job_id(stdscr):
         # ignore everything else
 
     stdscr.nodelay(True)
-    stdscr.timeout(0)
+    stdscr.timeout(200)
     if not job_str:
         return None
     try:
@@ -644,7 +643,7 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
                 scroll = min(max_scroll, scroll + max_lines)
 
     finally:
-        stdscr.timeout(0)
+        stdscr.timeout(200)
         stdscr.nodelay(True)
 
 
@@ -662,9 +661,9 @@ def run_dashboard(
     page_size=DEFAULT_PAGE_SIZE,
 ):
     curses.curs_set(0)
-    stdscr.nodelay(True)
-    stdscr.timeout(0)
+    stdscr.nodelay(False)
     stdscr.keypad(True)
+    stdscr.timeout(200)  # 200 ms for getch
     curses.start_color()
 
     curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)   # good
@@ -692,16 +691,16 @@ def run_dashboard(
     job_selected = 0          # index in jobs_sorted of selected job
     job_selection_active = False  # becomes True once user scrolls
 
-    try:
-        try:
-            while True:
-                loop_start = time.time()
-                h, w = stdscr.getmaxyx()
-                stdscr.erase()
+    last_fetch = 0.0
 
-                # ------------------------------------------------------------------
-                # Fetch data (instances + recent jobs), in parallel
-                # ------------------------------------------------------------------
+    try:
+        while True:
+            now = time.time()
+
+            # ------------------------------------------------------------------
+            # Fetch data if it's time
+            # ------------------------------------------------------------------
+            if now - last_fetch >= poll_interval:
                 futures = {
                     executor.submit(fetch_instances, base_url, token, timeout, insecure): "instances",
                     executor.submit(fetch_recent_jobs, base_url, token, timeout, insecure, page_size): "jobs",
@@ -719,370 +718,320 @@ def run_dashboard(
                     else:
                         jobs, jobs_error = result, err
 
-                # ------------------------------------------------------------------
-                # Header
-                # ------------------------------------------------------------------
-                now = time.strftime("%Y-%m-%d %H:%M:%S")
-                title = "AAP Environment Monitor (Controller)"
-                header = f"{title}  {now}  host:{MONITOR_HOST}"
-                stdscr.addstr(0, 0, header[:w - 1], curses.color_pair(5))
+                last_fetch = time.time()
 
-                # Summary line
-                good_i = warn_i = bad_i = unknown_i = 0
-                for inst in instances:
-                    cls = classify_instance(inst)
-                    if cls == "good":
-                        good_i += 1
-                    elif cls == "warn":
-                        warn_i += 1
-                    elif cls == "bad":
-                        bad_i += 1
-                    else:
-                        unknown_i += 1
+            # ------------------------------------------------------------------
+            # Draw the screen
+            # ------------------------------------------------------------------
+            h, w = stdscr.getmaxyx()
+            stdscr.erase()
 
-                running_jobs = sum(
-                    1 for j in jobs
-                    if str(j.get("status", "")).lower() == "running"
-                )
-                failed_jobs = sum(
-                    1 for j in jobs
-                    if classify_status_text(j.get("status")) == "bad"
-                )
+            # Header
+            now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+            title = "AAP Environment Monitor (Controller)"
+            header = f"{title}  {now_str}  host:{MONITOR_HOST}"
+            stdscr.addstr(0, 0, header[:w - 1], curses.color_pair(5))
 
-                summary = (
-                    f"Instances: G={good_i} W={warn_i} B={bad_i} U={unknown_i}  "
-                    f"Recent jobs: {len(jobs)}  running={running_jobs}  failed={failed_jobs}  "
-                    f"(Up/Down to select, 'v' to view)"
-                )
-                stdscr.addstr(1, 0, summary[:w - 1], curses.color_pair(5))
-
-                row = 3
-
-                # ------------------------------------------------------------------
-                # Topology section (instances)
-                # ------------------------------------------------------------------
-                if row < h:
-                    stdscr.addstr(row, 0, "Topology (instances):", curses.color_pair(5))
-                    row += 1
-
-                inst_names = [
-                    str(i.get("hostname") or i.get("node") or i.get("id") or "?")
-                    for i in instances
-                ]
-                max_name_len = max((len(n) for n in inst_names), default=4)
-                name_width = max(max_name_len, 8)
-
-                for inst, name in zip(instances, inst_names):
-                    if row >= h:
-                        break
-
-                    cls = classify_instance(inst)
-                    status_str = cls.upper()
-                    node_type = inst.get("node_type") or inst.get("type") or ""
-                    node_state = inst.get("node_state") or ""
-
-                    # First line: name, status, type/state
-                    extra_bits = []
-                    if node_type:
-                        extra_bits.append(node_type)
-                    if node_state:
-                        extra_bits.append(node_state)
-                    extra = ", ".join(extra_bits)
-
-                    line = f"  {name:{name_width}} [{status_str:7}]"
-                    if extra:
-                        line += f"  ({extra})"
-                    stdscr.addstr(
-                        row, 0, line[:w - 1],
-                        color_for_class.get(cls, curses.color_pair(5))
-                    )
-                    row += 1
-
-                    # Second line: memory / forks / last health check
-                    if row >= h:
-                        break
-
-                    memory = inst.get("memory") or inst.get("mem")
-                    forks = inst.get("forks")
-                    if forks is None:
-                        forks = inst.get("capacity")
-                    last_health = (
-                        inst.get("last_health_check")
-                        or inst.get("heartbeat")
-                        or inst.get("last_isolated_check")
-                    )
-
-                    details = []
-                    if memory is not None:
-                        details.append(f"mem={memory}")
-                    if forks is not None:
-                        details.append(f"forks={forks}")
-                    if last_health:
-                        last_str = str(last_health)
-                        if len(last_str) > 32:
-                            last_str = last_str[:29] + "..."
-                        details.append(f"last={last_str}")
-
-                    if details:
-                        det_line = "    " + "  ".join(details)
-                        stdscr.addstr(
-                            row, 0,
-                            det_line[:w - 1],
-                            color_for_class.get(cls, curses.color_pair(5)),
-                        )
-                        row += 1
-
-                    # Third line: error reason from instance.errors
-                    errors_field = inst.get("errors")
-                    if errors_field and row < h:
-                        err_str = str(errors_field)
-                        err_str = " ".join(err_str.split())
-                        max_err_width = max(10, w - 8)
-                        if len(err_str) > max_err_width:
-                            err_str = err_str[: max_err_width - 3] + "..."
-                        err_line = f"    error: {err_str}"
-                        stdscr.addstr(
-                            row, 0,
-                            err_line[:w - 1],
-                            color_for_class.get(cls, curses.color_pair(5)),
-                        )
-                        row += 1
-
-                if inst_error and row < h:
-                    stdscr.addstr(
-                        row, 2,
-                        f"instances error: {inst_error}"[:w - 3],
-                        curses.color_pair(4),
-                    )
-                    row += 1
-
-                # ------------------------------------------------------------------
-                # Recent jobs section (last N by job ID, newest first)
-                # ------------------------------------------------------------------
-                # Sort jobs by integer ID descending so newest IDs are first
-                def job_sort_key(j):
-                    try:
-                        return int(j.get("id", 0))
-                    except Exception:
-                        return 0
-
-                jobs_sorted = sorted(jobs, key=job_sort_key, reverse=True)
-                len_jobs = len(jobs_sorted)
-
-                if row < h:
-                    stdscr.addstr(
-                        row, 0,
-                        "Recent jobs (newest first by ID):",
-                        curses.color_pair(5),
-                    )
-                    row += 1
-
-                if row < h:
-                    # S = selection marker column
-                    header_line = " S   ID    Elapsed  Start  User           Status   Name"
-                    stdscr.addstr(row, 0, header_line[:w - 1], curses.color_pair(5))
-                    row += 1
-
-                # Compute how many rows are available for jobs
-                jobs_row_start = row
-                max_visible_jobs = max(0, h - jobs_row_start - 1)  # leave space for errors
-
-                # Keep selection and scroll within bounds
-                if len_jobs == 0:
-                    job_scroll = 0
-                    job_selected = 0
-                    job_selection_active = False
+            # Summary line
+            good_i = warn_i = bad_i = unknown_i = 0
+            for inst in instances:
+                cls = classify_instance(inst)
+                if cls == "good":
+                    good_i += 1
+                elif cls == "warn":
+                    warn_i += 1
+                elif cls == "bad":
+                    bad_i += 1
                 else:
-                    if job_selected >= len_jobs:
-                        job_selected = len_jobs - 1
-                    if job_selected < 0:
-                        job_selected = 0
+                    unknown_i += 1
 
-                    if max_visible_jobs > 0:
-                        max_scroll = max(0, len_jobs - max_visible_jobs)
-                        if job_scroll > max_scroll:
-                            job_scroll = max_scroll
-                        if job_selected < job_scroll:
-                            job_scroll = job_selected
-                        if job_selected >= job_scroll + max_visible_jobs:
-                            job_scroll = max(0, job_selected - max_visible_jobs + 1)
-                    else:
-                        job_scroll = 0
+            running_jobs = sum(
+                1 for j in jobs
+                if str(j.get("status", "")).lower() == "running"
+            )
+            failed_jobs = sum(
+                1 for j in jobs
+                if classify_status_text(j.get("status")) == "bad"
+            )
 
-                # Render jobs
-                visible_jobs = []
-                if max_visible_jobs > 0 and len_jobs > 0:
-                    visible_jobs = jobs_sorted[job_scroll: job_scroll + max_visible_jobs]
+            summary = (
+                f"Instances: G={good_i} W={warn_i} B={bad_i} U={unknown_i}  "
+                f"Recent jobs: {len(jobs)}  running={running_jobs}  failed={failed_jobs}  "
+                f"(Up/Down to select, 'v' to view)"
+            )
+            stdscr.addstr(1, 0, summary[:w - 1], curses.color_pair(5))
 
-                for idx, job in enumerate(visible_jobs):
-                    if row >= h:
-                        break
+            row = 3
 
-                    global_index = job_scroll + idx
-                    jid = job.get("id")
-                    status = job.get("status") or "?"
-                    status_str = str(status)
-                    status_lower = status_str.lower()
-                    elapsed = job.get("elapsed")
+            # ------------------------------------------------------------------
+            # Topology section (instances)
+            # ------------------------------------------------------------------
+            if row < h:
+                stdscr.addstr(row, 0, "Topology (instances):", curses.color_pair(5))
+                row += 1
 
-                    started_dt = parse_iso8601(job.get("started"))
-                    age_str = format_age_from_start(started_dt) if started_dt else "--"
+            inst_names = [
+                str(i.get("hostname") or i.get("node") or i.get("id") or "?")
+                for i in instances
+            ]
+            max_name_len = max((len(n) for n in inst_names), default=4)
+            name_width = max(max_name_len, 8)
 
-                    # For running jobs, elapsed may be 0; compute from started if needed
-                    try:
-                        elapsed_val = float(elapsed) if elapsed is not None else 0.0
-                    except Exception:
-                        elapsed_val = 0.0
+            for inst, name in zip(instances, inst_names):
+                if row >= h:
+                    break
 
-                    if elapsed is None or elapsed_val <= 0.0:
-                        if started_dt:
-                            elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
-                        else:
-                            elapsed = None
+                cls = classify_instance(inst)
+                status_str = cls.upper()
+                node_type = inst.get("node_type") or inst.get("type") or ""
+                node_state = inst.get("node_state") or ""
 
-                    elapsed_str = format_elapsed(elapsed)
+                extra_bits = []
+                if node_type:
+                    extra_bits.append(node_type)
+                if node_state:
+                    extra_bits.append(node_state)
+                extra = ", ".join(extra_bits)
 
-                    sf = job.get("summary_fields") or {}
-                    created_by = sf.get("created_by") or {}
-                    user = created_by.get("username") or created_by.get("first_name") or "?"
+                line = f"  {name:{name_width}} [{status_str:7}]"
+                if extra:
+                    line += f"  ({extra})"
+                stdscr.addstr(
+                    row, 0, line[:w - 1],
+                    color_for_class.get(cls, curses.color_pair(5))
+                )
+                row += 1
 
-                    name = str(job.get("name") or job.get("job_template", ""))
+                if row >= h:
+                    break
 
-                    cls = classify_status_text(status_str)
-                    base_style = color_for_class.get(cls, curses.color_pair(5))
+                memory = inst.get("memory") or inst.get("mem")
+                forks = inst.get("forks")
+                if forks is None:
+                    forks = inst.get("capacity")
+                last_health = (
+                    inst.get("last_health_check")
+                    or inst.get("heartbeat")
+                    or inst.get("last_isolated_check")
+                )
 
-                    if status_lower == "running":
-                        style = curses.color_pair(1) | curses.A_REVERSE
-                    elif status_lower in ("successful", "completed", "finished"):
-                        style = curses.color_pair(5) | curses.A_DIM
-                    elif cls == "bad":
-                        style = color_for_class["bad"]
-                    else:
-                        style = base_style
+                details = []
+                if memory is not None:
+                    details.append(f"mem={memory}")
+                if forks is not None:
+                    details.append(f"forks={forks}")
+                if last_health:
+                    last_str = str(last_health)
+                    if len(last_str) > 32:
+                        last_str = last_str[:29] + "..."
+                    details.append(f"last={last_str}")
 
-                    # Apply selection highlight for the selected job
-                    is_selected = job_selection_active and (global_index == job_selected)
-                    if is_selected:
-                        style |= curses.A_REVERSE
-
-                    sel_char = ">" if is_selected else " "
-
-                    line = (
-                        f" {sel_char}  {jid:4}  {elapsed_str:9}  {age_str:5}  "
-                        f"{user:12.12}  {status_str:7}  {name}"
-                    )
+                if details:
+                    det_line = "    " + "  ".join(details)
                     stdscr.addstr(
                         row, 0,
-                        line[:w - 1],
-                        style,
+                        det_line[:w - 1],
+                        color_for_class.get(cls, curses.color_pair(5)),
                     )
                     row += 1
 
-                if jobs_error and row < h:
+                errors_field = inst.get("errors")
+                if errors_field and row < h:
+                    err_str = str(errors_field)
+                    err_str = " ".join(err_str.split())
+                    max_err_width = max(10, w - 8)
+                    if len(err_str) > max_err_width:
+                        err_str = err_str[: max_err_width - 3] + "..."
+                    err_line = f"    error: {err_str}"
                     stdscr.addstr(
-                        row, 2,
-                        f"jobs error: {jobs_error}"[:w - 3],
-                        curses.color_pair(4),
+                        row, 0,
+                        err_line[:w - 1],
+                        color_for_class.get(cls, curses.color_pair(5)),
                     )
                     row += 1
 
-                stdscr.refresh()
+            if inst_error and row < h:
+                stdscr.addstr(
+                    row, 2,
+                    f"instances error: {inst_error}"[:w - 3],
+                    curses.color_pair(4),
+                )
+                row += 1
 
-                # ------------------------------------------------------------------
-                # Key handling / pacing
-                # ------------------------------------------------------------------
-                remaining = poll_interval - (time.time() - loop_start)
-                if remaining < 0:
-                    remaining = 0
-                end_wait = time.time() + remaining
+            # ------------------------------------------------------------------
+            # Recent jobs section (newest first by ID)
+            # ------------------------------------------------------------------
+            def job_sort_key(j):
+                try:
+                    return int(j.get("id", 0))
+                except Exception:
+                    return 0
 
-                # Keep these for key handling
-                last_len_jobs = len_jobs
-                last_max_visible_jobs = max_visible_jobs
+            jobs_sorted = sorted(jobs, key=job_sort_key, reverse=True)
+            len_jobs = len(jobs_sorted)
 
-                need_early_refresh = False
+            if row < h:
+                stdscr.addstr(
+                    row, 0,
+                    "Recent jobs (newest first by ID):",
+                    curses.color_pair(5),
+                )
+                row += 1
 
-                while time.time() < end_wait:
-                    ch = stdscr.getch()
-                    if ch == -1:
-                        time.sleep(0.05)
-                        continue
+            if row < h:
+                header_line = " S   ID    Elapsed  Start  User           Status   Name"
+                stdscr.addstr(row, 0, header_line[:w - 1], curses.color_pair(5))
+                row += 1
 
-                    # Quit
-                    if ch in (ord("q"), ord("Q"), 27):  # q or ESC
-                        return
+            jobs_row_start = row
+            max_visible_jobs = max(0, h - jobs_row_start - 1)  # leave space for errors
 
-                    # Scroll / select jobs only if we have jobs
-                    if last_len_jobs > 0:
-                        if ch == curses.KEY_UP:
-                            job_selection_active = True
-                            if job_selected > 0:
-                                job_selected -= 1
-                                if job_selected < job_scroll:
-                                    job_scroll = job_selected
-                            need_early_refresh = True
-                            break
-                        elif ch == curses.KEY_DOWN:
-                            job_selection_active = True
-                            if job_selected < last_len_jobs - 1:
-                                job_selected += 1
-                                if last_max_visible_jobs > 0 and \
-                                        job_selected >= job_scroll + last_max_visible_jobs:
-                                    job_scroll = max(0, job_selected - last_max_visible_jobs + 1)
-                            need_early_refresh = True
-                            break
-                        elif ch == curses.KEY_PPAGE:  # PgUp
-                            job_selection_active = True
-                            if last_max_visible_jobs > 0:
-                                job_selected = max(0, job_selected - last_max_visible_jobs)
-                                job_scroll = max(0, job_scroll - last_max_visible_jobs)
-                            else:
-                                job_selected = 0
-                                job_scroll = 0
-                            need_early_refresh = True
-                            break
-                        elif ch == curses.KEY_NPAGE:  # PgDn
-                            job_selection_active = True
-                            if last_max_visible_jobs > 0:
-                                job_selected = min(
-                                    last_len_jobs - 1,
-                                    job_selected + last_max_visible_jobs
-                                )
-                                max_scroll = max(0, last_len_jobs - last_max_visible_jobs)
-                                job_scroll = min(max_scroll, job_scroll + last_max_visible_jobs)
-                            else:
-                                job_selected = last_len_jobs - 1
-                                job_scroll = 0
-                            need_early_refresh = True
-                            break
+            # Clamp selection/scroll
+            if len_jobs == 0:
+                job_scroll = 0
+                job_selected = 0
+                job_selection_active = False
+            else:
+                if job_selected >= len_jobs:
+                    job_selected = len_jobs - 1
+                if job_selected < 0:
+                    job_selected = 0
 
-                    # 'v' -> view selected job or prompt
-                    if ch in (ord("v"), ord("V")):
-                        job_id = None
-                        if job_selection_active and last_len_jobs > 0:
-                            # Use selected job
-                            if 0 <= job_selected < last_len_jobs:
-                                selected_job = jobs_sorted[job_selected]
-                                job_id = selected_job.get("id")
-                        else:
-                            # Fallback: prompt for ID
-                            job_id = prompt_for_job_id(stdscr)
+                if max_visible_jobs > 0:
+                    max_scroll = max(0, len_jobs - max_visible_jobs)
+                    if job_scroll > max_scroll:
+                        job_scroll = max_scroll
+                    if job_selected < job_scroll:
+                        job_scroll = job_selected
+                    if job_selected >= job_scroll + max_visible_jobs:
+                        job_scroll = max(0, job_selected - max_visible_jobs + 1)
+                else:
+                    job_scroll = 0
 
-                        if job_id is not None:
-                            job_view(stdscr, base_url, token, timeout, insecure, job_id)
-                            need_early_refresh = True
-                            break
+            visible_jobs = []
+            if max_visible_jobs > 0 and len_jobs > 0:
+                visible_jobs = jobs_sorted[job_scroll: job_scroll + max_visible_jobs]
 
-                    # Nothing interesting: small sleep
-                    time.sleep(0.05)
+            for idx, job in enumerate(visible_jobs):
+                if row >= h:
+                    break
 
-                if need_early_refresh:
-                    # Skip sleeping the rest of the interval; redraw immediately
-                    continue
+                global_index = job_scroll + idx
+                jid = job.get("id")
+                status = job.get("status") or "?"
+                status_str = str(status)
+                status_lower = status_str.lower()
+                elapsed = job.get("elapsed")
 
-        except KeyboardInterrupt:
-            # clean exit on Ctrl-C
-            return
+                started_dt = parse_iso8601(job.get("started"))
+                age_str = format_age_from_start(started_dt) if started_dt else "--"
+
+                try:
+                    elapsed_val = float(elapsed) if elapsed is not None else 0.0
+                except Exception:
+                    elapsed_val = 0.0
+
+                if elapsed is None or elapsed_val <= 0.0:
+                    if started_dt:
+                        elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
+                    else:
+                        elapsed = None
+
+                elapsed_str = format_elapsed(elapsed)
+
+                sf = job.get("summary_fields") or {}
+                created_by = sf.get("created_by") or {}
+                user = created_by.get("username") or created_by.get("first_name") or "?"
+
+                name = str(job.get("name") or job.get("job_template", ""))
+
+                cls = classify_status_text(status_str)
+                base_style = color_for_class.get(cls, curses.color_pair(5))
+
+                if status_lower == "running":
+                    style = curses.color_pair(1) | curses.A_REVERSE
+                elif status_lower in ("successful", "completed", "finished"):
+                    style = curses.color_pair(5) | curses.A_DIM
+                elif cls == "bad":
+                    style = color_for_class["bad"]
+                else:
+                    style = base_style
+
+                is_selected = job_selection_active and (global_index == job_selected)
+                if is_selected:
+                    style |= curses.A_REVERSE
+
+                sel_char = ">" if is_selected else " "
+
+                line = (
+                    f" {sel_char}  {jid:4}  {elapsed_str:9}  {age_str:5}  "
+                    f"{user:12.12}  {status_str:7}  {name}"
+                )
+                stdscr.addstr(
+                    row, 0,
+                    line[:w - 1],
+                    style,
+                )
+                row += 1
+
+            if jobs_error and row < h:
+                stdscr.addstr(
+                    row, 2,
+                    f"jobs error: {jobs_error}"[:w - 3],
+                    curses.color_pair(4),
+                )
+                row += 1
+
+            stdscr.refresh()
+
+            # ------------------------------------------------------------------
+            # Key handling (single getch per loop)
+            # ------------------------------------------------------------------
+            ch = stdscr.getch()
+            if ch == -1:
+                continue
+
+            # Quit
+            if ch in (ord("q"), ord("Q"), 27):
+                break
+
+            # Navigation only if jobs exist
+            if len_jobs > 0:
+                if ch == curses.KEY_UP:
+                    job_selection_active = True
+                    if job_selected > 0:
+                        job_selected -= 1
+                elif ch == curses.KEY_DOWN:
+                    job_selection_active = True
+                    if job_selected < len_jobs - 1:
+                        job_selected += 1
+                elif ch == curses.KEY_PPAGE:  # PgUp
+                    job_selection_active = True
+                    if max_visible_jobs > 0:
+                        job_selected = max(0, job_selected - max_visible_jobs)
+                    else:
+                        job_selected = 0
+                elif ch == curses.KEY_NPAGE:  # PgDn
+                    job_selection_active = True
+                    if max_visible_jobs > 0:
+                        job_selected = min(len_jobs - 1, job_selected + max_visible_jobs)
+                    else:
+                        job_selected = len_jobs - 1
+
+            # 'v' to view job:
+            if ch in (ord("v"), ord("V")):
+                job_id = None
+                if job_selection_active and len_jobs > 0 and 0 <= job_selected < len_jobs:
+                    job_id = jobs_sorted[job_selected].get("id")
+                else:
+                    job_id = prompt_for_job_id(stdscr)
+
+                if job_id is not None:
+                    job_view(stdscr, base_url, token, timeout, insecure, job_id)
+                    # after returning, loop continues and redraws with latest data
+
+    except KeyboardInterrupt:
+        return
     finally:
         executor.shutdown(wait=False)
 
