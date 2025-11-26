@@ -31,10 +31,15 @@ It:
     - Successful/completed jobs: dim grey.
     - Failed/error jobs: red.
 - Jobs are displayed from newest to oldest by job ID.
-- Allows zooming into a single job's details/output:
-    - Press 'v' in the main view, enter job ID.
+- Interactive job list:
+    - Use Up/Down/PgUp/PgDn to scroll through jobs.
+    - The selected job is marked with '>'.
+    - Press 'v' to view the selected job.
+    - If no selection has been made, 'v' prompts for a job ID as before.
+- Job detail view:
+    - Press 'v' in the main view, enter job ID OR select a job and press 'v'.
     - Shows job metadata and scrollable stdout.
-    - q or ESC to return to main dashboard.
+    - q or ESC returns to main dashboard.
     - If the job is running, detail view auto-refreshes every 5 seconds.
 - Uses only Python standard library modules (suitable for typical AAP installs).
 
@@ -70,8 +75,9 @@ AUTH_SCHEME below.
 Controls
 --------
 Main dashboard:
-- q or ESC : quit the program
-- v        : view a job by ID (prompts for job ID)
+- Up/Down, PgUp/PgDn : move selection / scroll jobs list
+- v                  : view selected job; if no selection, prompt for job ID
+- q or ESC           : quit the program
 
 Job view:
 - Up/Down, PgUp/PgDn : scroll output
@@ -100,9 +106,6 @@ AUTH_SCHEME = "Bearer"  # Change to "Token" if your AAP uses "Authorization: Tok
 DEFAULT_TIMEOUT = 5.0
 DEFAULT_POLL_INTERVAL = 2.0
 DEFAULT_PAGE_SIZE = 50
-
-# How many jobs to display max (even if API returns more)
-MAX_JOBS_DISPLAY = 20
 
 # Host running this monitor
 MONITOR_HOST = socket.gethostname()
@@ -418,7 +421,8 @@ def prompt_for_job_id(stdscr):
     prompt = "Job ID to view (Enter to confirm, ESC to cancel): "
     job_str = ""
 
-    stdscr.nodelay(False)  # make getch blocking while typing
+    stdscr.nodelay(False)  # blocking while typing
+    stdscr.timeout(-1)
 
     while True:
         stdscr.move(h - 1, 0)
@@ -439,7 +443,8 @@ def prompt_for_job_id(stdscr):
             job_str += chr(ch)
         # ignore everything else
 
-    stdscr.nodelay(True)  # restore non-blocking
+    stdscr.nodelay(True)
+    stdscr.timeout(0)
     if not job_str:
         return None
     try:
@@ -455,6 +460,7 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
     Running jobs auto-refresh every 5 seconds.
     """
     stdscr.timeout(200)  # 200 ms
+    stdscr.nodelay(False)
 
     scroll = 0
     last_fetch = 0
@@ -603,7 +609,7 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
             max_scroll = max(0, len(lines) - max_lines)
             scroll = max(0, min(scroll, max_scroll))
 
-            visible = lines[scroll : scroll + max_lines]
+            visible = lines[scroll: scroll + max_lines]
             for idx, line in enumerate(visible):
                 if top_row + idx >= h:
                     break
@@ -638,7 +644,7 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
                 scroll = min(max_scroll, scroll + max_lines)
 
     finally:
-        stdscr.timeout(-1)
+        stdscr.timeout(0)
         stdscr.nodelay(True)
 
 
@@ -657,6 +663,8 @@ def run_dashboard(
 ):
     curses.curs_set(0)
     stdscr.nodelay(True)
+    stdscr.timeout(0)
+    stdscr.keypad(True)
     curses.start_color()
 
     curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)   # good
@@ -678,6 +686,11 @@ def run_dashboard(
     jobs_error = None
 
     executor = ThreadPoolExecutor(max_workers=2)
+
+    # Job list navigation state
+    job_scroll = 0            # index of first visible job
+    job_selected = 0          # index in jobs_sorted of selected job
+    job_selection_active = False  # becomes True once user scrolls
 
     try:
         try:
@@ -739,7 +752,7 @@ def run_dashboard(
                 summary = (
                     f"Instances: G={good_i} W={warn_i} B={bad_i} U={unknown_i}  "
                     f"Recent jobs: {len(jobs)}  running={running_jobs}  failed={failed_jobs}  "
-                    f"(press 'v' for job view)"
+                    f"(Up/Down to select, 'v' to view)"
                 )
                 stdscr.addstr(1, 0, summary[:w - 1], curses.color_pair(5))
 
@@ -846,20 +859,7 @@ def run_dashboard(
                 # ------------------------------------------------------------------
                 # Recent jobs section (last N by job ID, newest first)
                 # ------------------------------------------------------------------
-                if row < h:
-                    stdscr.addstr(
-                        row, 0,
-                        f"Recent jobs (last {min(page_size, MAX_JOBS_DISPLAY)} shown, newest first by ID):",
-                        curses.color_pair(5),
-                    )
-                    row += 1
-
-                if row < h:
-                    # New column "Start" (age since start)
-                    header_line = "  ID    Elapsed  Start  User           Status   Name"
-                    stdscr.addstr(row, 0, header_line[:w - 1], curses.color_pair(5))
-                    row += 1
-
+                # Sort jobs by integer ID descending so newest IDs are first
                 def job_sort_key(j):
                     try:
                         return int(j.get("id", 0))
@@ -867,11 +867,58 @@ def run_dashboard(
                         return 0
 
                 jobs_sorted = sorted(jobs, key=job_sort_key, reverse=True)
+                len_jobs = len(jobs_sorted)
 
-                for job in jobs_sorted[:MAX_JOBS_DISPLAY]:
+                if row < h:
+                    stdscr.addstr(
+                        row, 0,
+                        "Recent jobs (newest first by ID):",
+                        curses.color_pair(5),
+                    )
+                    row += 1
+
+                if row < h:
+                    # S = selection marker column
+                    header_line = " S   ID    Elapsed  Start  User           Status   Name"
+                    stdscr.addstr(row, 0, header_line[:w - 1], curses.color_pair(5))
+                    row += 1
+
+                # Compute how many rows are available for jobs
+                jobs_row_start = row
+                max_visible_jobs = max(0, h - jobs_row_start - 1)  # leave space for errors
+
+                # Keep selection and scroll within bounds
+                if len_jobs == 0:
+                    job_scroll = 0
+                    job_selected = 0
+                    job_selection_active = False
+                else:
+                    if job_selected >= len_jobs:
+                        job_selected = len_jobs - 1
+                    if job_selected < 0:
+                        job_selected = 0
+
+                    if max_visible_jobs > 0:
+                        max_scroll = max(0, len_jobs - max_visible_jobs)
+                        if job_scroll > max_scroll:
+                            job_scroll = max_scroll
+                        if job_selected < job_scroll:
+                            job_scroll = job_selected
+                        if job_selected >= job_scroll + max_visible_jobs:
+                            job_scroll = max(0, job_selected - max_visible_jobs + 1)
+                    else:
+                        job_scroll = 0
+
+                # Render jobs
+                visible_jobs = []
+                if max_visible_jobs > 0 and len_jobs > 0:
+                    visible_jobs = jobs_sorted[job_scroll: job_scroll + max_visible_jobs]
+
+                for idx, job in enumerate(visible_jobs):
                     if row >= h:
                         break
 
+                    global_index = job_scroll + idx
                     jid = job.get("id")
                     status = job.get("status") or "?"
                     status_str = str(status)
@@ -913,8 +960,15 @@ def run_dashboard(
                     else:
                         style = base_style
 
+                    # Apply selection highlight for the selected job
+                    is_selected = job_selection_active and (global_index == job_selected)
+                    if is_selected:
+                        style |= curses.A_REVERSE
+
+                    sel_char = ">" if is_selected else " "
+
                     line = (
-                        f"  {jid:4}  {elapsed_str:9}  {age_str:5}  "
+                        f" {sel_char}  {jid:4}  {elapsed_str:9}  {age_str:5}  "
                         f"{user:12.12}  {status_str:7}  {name}"
                     )
                     stdscr.addstr(
@@ -938,18 +992,96 @@ def run_dashboard(
                 # Key handling / pacing
                 # ------------------------------------------------------------------
                 remaining = poll_interval - (time.time() - loop_start)
-                end_wait = time.time() + max(0.0, remaining)
+                if remaining < 0:
+                    remaining = 0
+                end_wait = time.time() + remaining
+
+                # Keep these for key handling
+                last_len_jobs = len_jobs
+                last_max_visible_jobs = max_visible_jobs
+
+                need_early_refresh = False
+
                 while time.time() < end_wait:
                     ch = stdscr.getch()
+                    if ch == -1:
+                        time.sleep(0.05)
+                        continue
+
+                    # Quit
                     if ch in (ord("q"), ord("Q"), 27):  # q or ESC
                         return
+
+                    # Scroll / select jobs only if we have jobs
+                    if last_len_jobs > 0:
+                        if ch == curses.KEY_UP:
+                            job_selection_active = True
+                            if job_selected > 0:
+                                job_selected -= 1
+                                if job_selected < job_scroll:
+                                    job_scroll = job_selected
+                            need_early_refresh = True
+                            break
+                        elif ch == curses.KEY_DOWN:
+                            job_selection_active = True
+                            if job_selected < last_len_jobs - 1:
+                                job_selected += 1
+                                if last_max_visible_jobs > 0 and \
+                                        job_selected >= job_scroll + last_max_visible_jobs:
+                                    job_scroll = max(0, job_selected - last_max_visible_jobs + 1)
+                            need_early_refresh = True
+                            break
+                        elif ch == curses.KEY_PPAGE:  # PgUp
+                            job_selection_active = True
+                            if last_max_visible_jobs > 0:
+                                job_selected = max(0, job_selected - last_max_visible_jobs)
+                                job_scroll = max(0, job_scroll - last_max_visible_jobs)
+                            else:
+                                job_selected = 0
+                                job_scroll = 0
+                            need_early_refresh = True
+                            break
+                        elif ch == curses.KEY_NPAGE:  # PgDn
+                            job_selection_active = True
+                            if last_max_visible_jobs > 0:
+                                job_selected = min(
+                                    last_len_jobs - 1,
+                                    job_selected + last_max_visible_jobs
+                                )
+                                max_scroll = max(0, last_len_jobs - last_max_visible_jobs)
+                                job_scroll = min(max_scroll, job_scroll + last_max_visible_jobs)
+                            else:
+                                job_selected = last_len_jobs - 1
+                                job_scroll = 0
+                            need_early_refresh = True
+                            break
+
+                    # 'v' -> view selected job or prompt
                     if ch in (ord("v"), ord("V")):
-                        job_id = prompt_for_job_id(stdscr)
+                        job_id = None
+                        if job_selection_active and last_len_jobs > 0:
+                            # Use selected job
+                            if 0 <= job_selected < last_len_jobs:
+                                selected_job = jobs_sorted[job_selected]
+                                job_id = selected_job.get("id")
+                        else:
+                            # Fallback: prompt for ID
+                            job_id = prompt_for_job_id(stdscr)
+
                         if job_id is not None:
                             job_view(stdscr, base_url, token, timeout, insecure, job_id)
+                            need_early_refresh = True
                             break
+
+                    # Nothing interesting: small sleep
                     time.sleep(0.05)
+
+                if need_early_refresh:
+                    # Skip sleeping the rest of the interval; redraw immediately
+                    continue
+
         except KeyboardInterrupt:
+            # clean exit on Ctrl-C
             return
     finally:
         executor.shutdown(wait=False)
@@ -1013,9 +1145,9 @@ def main():
             args.page_size,
         )
     except KeyboardInterrupt:
+        # avoid traceback on Ctrl-C
         pass
 
 
 if __name__ == "__main__":
     main()
-
