@@ -31,15 +31,17 @@ It:
     - Successful/completed jobs: dim grey.
     - Failed/error jobs: red.
 - Jobs are displayed from newest to oldest by job ID, but grouped as:
-    - all running jobs first,
+    - all running/pending jobs first,
     - then a separator line,
     - then all other jobs.
 - Interactive job list:
     - Use Up/Down/PgUp/PgDn to scroll through jobs.
+    - Use Home / End to jump to the first / last page of jobs.
     - The selected job is marked with '>'.
-    - Press Home / End to jump to the first / last page of jobs.
-    - Press 'v' to view the selected job.
-    - If no selection has been made, 'v' prompts for a job ID.
+    - Press 'v' to view the selected job (full-screen, with stdout).
+    - Press 'i' to show/hide inline job details (same metadata as 'v', no stdout)
+      in a panel below the jobs list.
+    - If no selection has been made, 'v' or 'i' prompts for a job ID.
 - Job detail view:
     - Shows job metadata and scrollable stdout.
     - q or ESC returns to main dashboard.
@@ -80,7 +82,10 @@ Controls
 Main dashboard:
 - Up/Down, PgUp/PgDn : move selection / scroll jobs list
 - Home / End         : jump to first / last page of jobs
-- v                  : view selected job; if no selection, prompt for job ID
+- v                  : view selected job (full-screen, with stdout);
+                       if no selection, prompt for job ID
+- i                  : show/hide inline job info (metadata only, no stdout);
+                       if no selection, prompt for job ID
 - q or ESC           : quit the program
 
 Job view:
@@ -150,12 +155,6 @@ def classify_status_text(status):
 def classify_instance(instance):
     """
     Determine GOOD/WARN/BAD/UNKNOWN for a Controller instance.
-
-    Heuristic based on common AAP/AWX instance fields:
-    - enabled (bool)
-    - capacity (int)
-    - errors (string/list/dict)
-    - node_state or node_type may be present but are treated as hints.
     """
     if not isinstance(instance, dict):
         return "unknown"
@@ -268,8 +267,6 @@ def api_get(base_url, path, token, timeout, insecure=False, query=None):
     """
     Make a GET request to base_url + path, with optional query dict.
     Returns parsed JSON on success.
-
-    Raises HTTPError / URLError on failure.
     """
     base_url = base_url.rstrip("/") + "/"
     url = urljoin(base_url, path.lstrip("/"))
@@ -317,11 +314,6 @@ def api_get_text(base_url, path, token, timeout, insecure=False, query=None):
 def fetch_instances(base_url, token, timeout, insecure=False):
     """
     Fetch Controller instances (cluster topology).
-
-    AAP 2.5 (via Gateway) endpoint:
-      GET /api/controller/v2/instances/
-
-    Returns (instances_list, error_str_or_None)
     """
     try:
         data = api_get(base_url, "/api/controller/v2/instances/", token, timeout, insecure)
@@ -341,11 +333,6 @@ def fetch_instances(base_url, token, timeout, insecure=False):
 def fetch_recent_jobs(base_url, token, timeout, insecure=False, page_size=DEFAULT_PAGE_SIZE):
     """
     Fetch recent jobs (all statuses) from Controller.
-
-    AAP 2.5 (via Gateway) endpoint:
-      GET /api/controller/v2/jobs/?order_by=-started&page_size=...
-
-    Returns (jobs_list, error_str_or_None)
     """
     query = {
         "order_by": "-started",
@@ -368,7 +355,6 @@ def fetch_recent_jobs(base_url, token, timeout, insecure=False, page_size=DEFAUL
 def fetch_job_detail(base_url, token, timeout, insecure, job_id):
     """
     Fetch a single job's details.
-    GET /api/controller/v2/jobs/<id>/
     """
     try:
         job = api_get(
@@ -392,7 +378,6 @@ def fetch_job_detail(base_url, token, timeout, insecure, job_id):
 def fetch_job_stdout(base_url, token, timeout, insecure, job_id):
     """
     Fetch job stdout as text.
-    GET /api/controller/v2/jobs/<id>/stdout/?format=txt
     """
     try:
         text = api_get_text(
@@ -445,7 +430,6 @@ def prompt_for_job_id(stdscr):
             job_str = job_str[:-1]
         elif 48 <= ch <= 57:  # digits 0-9
             job_str += chr(ch)
-        # ignore everything else
 
     stdscr.timeout(200)
     stdscr.nodelay(False)
@@ -510,89 +494,10 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
                 stdscr.addstr(row, 0, msg[: w - 1], curses.color_pair(3))
                 row += 2
             else:
-                status = job.get("status") or "?"
-                status_lower = str(status).lower()
-                name = str(job.get("name") or "")
-                job_type = job.get("job_type") or ""
-                template_name = ""
-                sf = job.get("summary_fields") or {}
-                jt = sf.get("job_template") or {}
-                if isinstance(jt, dict):
-                    template_name = jt.get("name") or ""
-                created_by = sf.get("created_by") or {}
-                user = created_by.get("username") or created_by.get("first_name") or "?"
-                started_raw = job.get("started")
-                finished_raw = job.get("finished")
-                started_dt = parse_iso8601(started_raw)
-                finished_dt = parse_iso8601(finished_raw)
-                elapsed = job.get("elapsed")
-
-                try:
-                    elapsed_val = float(elapsed) if elapsed is not None else 0.0
-                except Exception:
-                    elapsed_val = 0.0
-
-                if elapsed is None or elapsed_val <= 0.0:
-                    if started_dt:
-                        elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
-                    else:
-                        elapsed = None
-
-                elapsed_str = format_elapsed(elapsed)
-                age_str = format_age_from_start(started_dt) if started_dt else "--"
-
-                cls = classify_status_text(status)
-                base_style = curses.color_pair(5)
-                if status_lower == "running":
-                    status_style = curses.color_pair(1) | curses.A_REVERSE
-                elif status_lower in ("successful", "completed", "finished"):
-                    status_style = curses.color_pair(5) | curses.A_DIM
-                elif cls == "bad":
-                    status_style = curses.color_pair(3)
-                else:
-                    status_style = base_style
-
-                stdscr.addstr(row, 0, f"Name:     {name}"[: w - 1], base_style)
-                row += 1
-                stdscr.addstr(row, 0, f"Template: {template_name}"[: w - 1], base_style)
-                row += 1
-                stdscr.addstr(row, 0, f"User:     {user}"[: w - 1], base_style)
-                row += 1
-                stdscr.addstr(row, 0, "Status:   ", base_style)
-                stdscr.addstr(row, len("Status:   "), f"{status}", status_style)
-                row += 1
-                stdscr.addstr(
-                    row,
-                    0,
-                    f"Type:     {job_type}"[: w - 1],
-                    base_style,
+                row = render_job_metadata_block(
+                    stdscr, row, w, job, curses.color_pair(5)
                 )
                 row += 1
-                started_line = f"Started:  {started_raw or '-'}"
-                if started_dt:
-                    started_line += f"  ({age_str} ago)"
-                stdscr.addstr(
-                    row,
-                    0,
-                    started_line[: w - 1],
-                    base_style,
-                )
-                row += 1
-                stdscr.addstr(
-                    row,
-                    0,
-                    f"Finished: {finished_raw or '-'}"[: w - 1],
-                    base_style,
-                )
-                row += 1
-                stdscr.addstr(
-                    row,
-                    0,
-                    f"Elapsed:  {elapsed_str}"[: w - 1],
-                    base_style,
-                )
-                row += 2
-
                 stdscr.addstr(
                     row,
                     0,
@@ -655,6 +560,99 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
 
 
 # ---------------------------------------------------------------------------
+# Shared job metadata renderer
+# ---------------------------------------------------------------------------
+
+def render_job_metadata_block(stdscr, row, w, job, base_style):
+    """
+    Render the job metadata (same as in job_view) starting at 'row'.
+    Returns the next row index after the block.
+    """
+    status = job.get("status") or "?"
+    status_lower = str(status).lower()
+    name = str(job.get("name") or "")
+    job_type = job.get("job_type") or ""
+    template_name = ""
+    sf = job.get("summary_fields") or {}
+    jt = sf.get("job_template") or {}
+    if isinstance(jt, dict):
+        template_name = jt.get("name") or ""
+    created_by = sf.get("created_by") or {}
+    user = created_by.get("username") or created_by.get("first_name") or "?"
+    started_raw = job.get("started")
+    finished_raw = job.get("finished")
+    started_dt = parse_iso8601(started_raw)
+    finished_dt = parse_iso8601(finished_raw)
+    elapsed = job.get("elapsed")
+
+    try:
+        elapsed_val = float(elapsed) if elapsed is not None else 0.0
+    except Exception:
+        elapsed_val = 0.0
+
+    if elapsed is None or elapsed_val <= 0.0:
+        if started_dt:
+            elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
+        else:
+            elapsed = None
+
+    elapsed_str = format_elapsed(elapsed)
+    age_str = format_age_from_start(started_dt) if started_dt else "--"
+
+    cls = classify_status_text(status)
+    if status_lower == "running":
+        status_style = curses.color_pair(1) | curses.A_REVERSE
+    elif status_lower in ("successful", "completed", "finished"):
+        status_style = curses.color_pair(5) | curses.A_DIM
+    elif cls == "bad":
+        status_style = curses.color_pair(3)
+    else:
+        status_style = base_style
+
+    stdscr.addstr(row, 0, f"Name:     {name}"[: w - 1], base_style)
+    row += 1
+    stdscr.addstr(row, 0, f"Template: {template_name}"[: w - 1], base_style)
+    row += 1
+    stdscr.addstr(row, 0, f"User:     {user}"[: w - 1], base_style)
+    row += 1
+    stdscr.addstr(row, 0, "Status:   ", base_style)
+    stdscr.addstr(row, len("Status:   "), f"{status}", status_style)
+    row += 1
+    stdscr.addstr(
+        row,
+        0,
+        f"Type:     {job_type}"[: w - 1],
+        base_style,
+    )
+    row += 1
+    started_line = f"Started:  {started_raw or '-'}"
+    if started_dt:
+        started_line += f"  ({age_str} ago)"
+    stdscr.addstr(
+        row,
+        0,
+        started_line[: w - 1],
+        base_style,
+    )
+    row += 1
+    stdscr.addstr(
+        row,
+        0,
+        f"Finished: {finished_raw or '-'}"[: w - 1],
+        base_style,
+    )
+    row += 1
+    stdscr.addstr(
+        row,
+        0,
+        f"Elapsed:  {elapsed_str}"[: w - 1],
+        base_style,
+    )
+    row += 1
+    return row
+
+
+# ---------------------------------------------------------------------------
 # Main dashboard
 # ---------------------------------------------------------------------------
 
@@ -697,6 +695,11 @@ def run_dashboard(
     job_scroll = 0               # index of first visible row in display_jobs
     job_selected = 0             # index of selected row (must be a job row)
     job_selection_active = False
+
+    # Inline job info panel state
+    info_job_id = None
+    info_job_detail = None
+    info_job_error = None
 
     last_fetch = 0.0
 
@@ -764,7 +767,7 @@ def run_dashboard(
             summary = (
                 f"Instances: G={good_i} W={warn_i} B={bad_i} U={unknown_i}  "
                 f"Recent jobs: {len(jobs)}  running={running_jobs_count}  failed={failed_jobs}  "
-                f"(Up/Down/Home/End, 'v' to view)"
+                f"(Up/Down/Home/End, 'v'=view, 'i'=info)"
             )
             stdscr.addstr(1, 0, summary[:w - 1], curses.color_pair(5))
 
@@ -844,11 +847,9 @@ def run_dashboard(
                 color = color_for_class.get(cls, curses.color_pair(5))
 
                 if len(combined) <= w - 1:
-                    # Everything fits on one line
                     stdscr.addstr(row, 0, combined[: w - 1], color)
                     row += 1
                 else:
-                    # Multi-line fallback
                     stdscr.addstr(row, 0, base[: w - 1], color)
                     row += 1
                     if row >= h:
@@ -871,7 +872,7 @@ def run_dashboard(
                 row += 1
 
             # ------------------------------------------------------------------
-            # Recent jobs section (newest first by ID, running first)
+            # Recent jobs section (newest first by ID, running+pending first)
             # ------------------------------------------------------------------
             def job_sort_key(j):
                 try:
@@ -881,20 +882,30 @@ def run_dashboard(
 
             jobs_sorted = sorted(jobs, key=job_sort_key, reverse=True)
 
-            running_jobs = []
+            running_or_pending_jobs = []
             other_jobs = []
+
+            pending_like_statuses = {
+                "pending",
+                "waiting",
+                "new",
+                "scheduled",
+                "pending approval",
+                "pending_approval",
+            }
+
             for j in jobs_sorted:
                 st = str(j.get("status") or "").lower()
-                if st == "running":
-                    running_jobs.append(j)
+                if st == "running" or st in pending_like_statuses:
+                    running_or_pending_jobs.append(j)
                 else:
                     other_jobs.append(j)
 
             # Build display rows: ("job", job) or ("sep", None)
             display_jobs = []
-            for j in running_jobs:
+            for j in running_or_pending_jobs:
                 display_jobs.append(("job", j))
-            if running_jobs and other_jobs:
+            if running_or_pending_jobs and other_jobs:
                 display_jobs.append(("sep", None))
             for j in other_jobs:
                 display_jobs.append(("job", j))
@@ -906,7 +917,7 @@ def run_dashboard(
             if row < h:
                 stdscr.addstr(
                     row, 0,
-                    "Recent jobs (running first, newest by ID):",
+                    "Recent jobs (running/pending first, newest by ID):",
                     curses.color_pair(5),
                 )
                 row += 1
@@ -917,19 +928,27 @@ def run_dashboard(
                 row += 1
 
             jobs_row_start = row
-            max_visible_rows = max(0, h - jobs_row_start - 1)  # leave space for errors
+
+            # Reserve space for inline job info panel if present
+            if (info_job_detail is not None or info_job_error is not None) and h > 12:
+                reserved_info_lines = 10
+            else:
+                reserved_info_lines = 0
+
+            max_visible_rows = max(0, h - jobs_row_start - 1 - reserved_info_lines)
 
             # Clamp selection/scroll
             if job_count == 0:
                 job_scroll = 0
                 job_selected = 0
                 job_selection_active = False
+                info_job_id = None
+                info_job_detail = None
+                info_job_error = None
             else:
-                # Ensure selected row is a valid job row
                 if not (0 <= job_selected < len_display) or display_jobs[job_selected][0] != "job":
                     job_selected = job_indices[0]
 
-                # Clamp scroll to display rows
                 if max_visible_rows > 0:
                     max_scroll = max(0, len_display - max_visible_rows)
                     if job_scroll > max_scroll:
@@ -945,14 +964,14 @@ def run_dashboard(
             if max_visible_rows > 0 and len_display > 0:
                 visible_rows = display_jobs[job_scroll: job_scroll + max_visible_rows]
 
+            row = jobs_row_start
             for idx, (kind, payload) in enumerate(visible_rows):
-                if row >= h:
+                if row >= h - reserved_info_lines:
                     break
 
                 global_index = job_scroll + idx
 
                 if kind == "sep":
-                    # Separator between running and other jobs
                     sep_text = "---- other jobs ----"
                     stdscr.addstr(
                         row, 0,
@@ -1020,13 +1039,36 @@ def run_dashboard(
                 )
                 row += 1
 
-            if jobs_error and row < h:
+            if jobs_error and row < h - reserved_info_lines:
                 stdscr.addstr(
                     row, 2,
                     f"jobs error: {jobs_error}"[:w - 3],
                     curses.color_pair(4),
                 )
                 row += 1
+
+            # ------------------------------------------------------------------
+            # Inline job info panel (from 'i')
+            # ------------------------------------------------------------------
+            if reserved_info_lines and h > 10:
+                info_start_row = h - reserved_info_lines
+                if info_start_row > row:
+                    # Title
+                    title_line = f"Job info (ID {info_job_id})"
+                    stdscr.addstr(
+                        info_start_row,
+                        0,
+                        title_line[:w - 1],
+                        curses.color_pair(5),
+                    )
+                    r = info_start_row + 1
+                    if info_job_detail is None:
+                        msg = f"Unable to load job {info_job_id}: {info_job_error or 'unknown error'}"
+                        stdscr.addstr(r, 0, msg[: w - 1], curses.color_pair(3))
+                    else:
+                        r = render_job_metadata_block(
+                            stdscr, r, w, info_job_detail, curses.color_pair(5)
+                        )
 
             stdscr.refresh()
 
@@ -1038,7 +1080,6 @@ def run_dashboard(
                 continue
 
             if ch == curses.KEY_RESIZE:
-                # Terminal resized; just loop and redraw with new size
                 continue
 
             # Quit
@@ -1056,7 +1097,6 @@ def run_dashboard(
             if job_count > 0:
                 if ch == curses.KEY_UP:
                     job_selection_active = True
-                    # move to previous job row (skipping separator)
                     i = job_selected - 1
                     while i >= 0:
                         if display_jobs[i][0] == "job":
@@ -1074,7 +1114,6 @@ def run_dashboard(
                 elif ch == curses.KEY_PPAGE:  # PgUp
                     job_selection_active = True
                     if max_visible_rows > 0:
-                        # move scroll up a page and select first job in that window
                         job_scroll = max(0, job_scroll - max_visible_rows)
                         for i in range(job_scroll, len_display):
                             if display_jobs[i][0] == "job":
@@ -1088,7 +1127,6 @@ def run_dashboard(
                     if max_visible_rows > 0:
                         max_scroll = max(0, len_display - max_visible_rows)
                         job_scroll = min(max_scroll, job_scroll + max_visible_rows)
-                        # select first job in this window, or last job if none
                         selected = None
                         for i in range(job_scroll, min(len_display, job_scroll + max_visible_rows)):
                             if display_jobs[i][0] == "job":
@@ -1101,19 +1139,17 @@ def run_dashboard(
                     else:
                         job_selected = last_job_index()
                 elif ch == curses.KEY_HOME:
-                    # Go to first page / first job
                     job_selection_active = True
                     job_scroll = 0
                     job_selected = first_job_index()
                 elif ch == curses.KEY_END:
-                    # Go to last page / last job
                     job_selection_active = True
                     last_idx = last_job_index()
                     if max_visible_rows > 0:
                         job_scroll = max(0, last_idx - max_visible_rows + 1)
                     job_selected = last_idx
 
-            # 'v' to view job:
+            # 'v' to view job (full-screen)
             if ch in (ord("v"), ord("V")):
                 job_id = None
                 if job_selection_active and job_count > 0 and \
@@ -1126,7 +1162,32 @@ def run_dashboard(
 
                 if job_id is not None:
                     job_view(stdscr, base_url, token, timeout, insecure, job_id)
-                    # after returning, loop continues and redraws with latest data
+                    # after returning, loop continues and redraws
+
+            # 'i' to show inline info panel (metadata only)
+            if ch in (ord("i"), ord("I")):
+                job_id = None
+                if job_selection_active and job_count > 0 and \
+                        0 <= job_selected < len_display and \
+                        display_jobs[job_selected][0] == "job":
+                    job_obj = display_jobs[job_selected][1]
+                    job_id = job_obj.get("id")
+                else:
+                    job_id = prompt_for_job_id(stdscr)
+
+                if job_id is not None:
+                    if info_job_id == job_id and info_job_detail is not None:
+                        # toggle off
+                        info_job_id = None
+                        info_job_detail = None
+                        info_job_error = None
+                    else:
+                        detail, err = fetch_job_detail(
+                            base_url, token, timeout, insecure, job_id
+                        )
+                        info_job_id = job_id
+                        info_job_detail = detail
+                        info_job_error = err
 
     except KeyboardInterrupt:
         return
@@ -1192,7 +1253,6 @@ def main():
             args.page_size,
         )
     except KeyboardInterrupt:
-        # avoid traceback on Ctrl-C
         pass
 
 
