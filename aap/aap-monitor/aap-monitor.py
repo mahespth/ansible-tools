@@ -30,10 +30,14 @@ It:
     - Running jobs: highlighted with reverse video.
     - Successful/completed jobs: dim grey.
     - Failed/error jobs: red.
-- Jobs are displayed from newest to oldest by job ID.
+- Jobs are displayed from newest to oldest by job ID, but grouped as:
+    - all running jobs first,
+    - then a separator line,
+    - then all other jobs.
 - Interactive job list:
     - Use Up/Down/PgUp/PgDn to scroll through jobs.
     - The selected job is marked with '>'.
+    - Press Home / End to jump to the first / last page of jobs.
     - Press 'v' to view the selected job.
     - If no selection has been made, 'v' prompts for a job ID.
 - Job detail view:
@@ -75,6 +79,7 @@ Controls
 --------
 Main dashboard:
 - Up/Down, PgUp/PgDn : move selection / scroll jobs list
+- Home / End         : jump to first / last page of jobs
 - v                  : view selected job; if no selection, prompt for job ID
 - q or ESC           : quit the program
 
@@ -442,8 +447,8 @@ def prompt_for_job_id(stdscr):
             job_str += chr(ch)
         # ignore everything else
 
-    stdscr.nodelay(True)
     stdscr.timeout(200)
+    stdscr.nodelay(False)
     if not job_str:
         return None
     try:
@@ -631,6 +636,8 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
 
             # Handle keys
             ch = stdscr.getch()
+            if ch == curses.KEY_RESIZE:
+                continue
             if ch in (ord("q"), ord("Q"), 27):  # q or ESC
                 break
             elif ch == curses.KEY_UP:
@@ -644,7 +651,7 @@ def job_view(stdscr, base_url, token, timeout, insecure, job_id):
 
     finally:
         stdscr.timeout(200)
-        stdscr.nodelay(True)
+        stdscr.nodelay(False)
 
 
 # ---------------------------------------------------------------------------
@@ -686,10 +693,10 @@ def run_dashboard(
 
     executor = ThreadPoolExecutor(max_workers=2)
 
-    # Job list navigation state
-    job_scroll = 0            # index of first visible job
-    job_selected = 0          # index in jobs_sorted of selected job
-    job_selection_active = False  # becomes True once user scrolls
+    # Job list navigation state (indexes into "display rows", not just jobs)
+    job_scroll = 0               # index of first visible row in display_jobs
+    job_selected = 0             # index of selected row (must be a job row)
+    job_selection_active = False
 
     last_fetch = 0.0
 
@@ -745,7 +752,7 @@ def run_dashboard(
                 else:
                     unknown_i += 1
 
-            running_jobs = sum(
+            running_jobs_count = sum(
                 1 for j in jobs
                 if str(j.get("status", "")).lower() == "running"
             )
@@ -756,8 +763,8 @@ def run_dashboard(
 
             summary = (
                 f"Instances: G={good_i} W={warn_i} B={bad_i} U={unknown_i}  "
-                f"Recent jobs: {len(jobs)}  running={running_jobs}  failed={failed_jobs}  "
-                f"(Up/Down to select, 'v' to view)"
+                f"Recent jobs: {len(jobs)}  running={running_jobs_count}  failed={failed_jobs}  "
+                f"(Up/Down/Home/End, 'v' to view)"
             )
             stdscr.addstr(1, 0, summary[:w - 1], curses.color_pair(5))
 
@@ -786,25 +793,7 @@ def run_dashboard(
                 node_type = inst.get("node_type") or inst.get("type") or ""
                 node_state = inst.get("node_state") or ""
 
-                extra_bits = []
-                if node_type:
-                    extra_bits.append(node_type)
-                if node_state:
-                    extra_bits.append(node_state)
-                extra = ", ".join(extra_bits)
-
-                line = f"  {name:{name_width}} [{status_str:7}]"
-                if extra:
-                    line += f"  ({extra})"
-                stdscr.addstr(
-                    row, 0, line[:w - 1],
-                    color_for_class.get(cls, curses.color_pair(5))
-                )
-                row += 1
-
-                if row >= h:
-                    break
-
+                # details: memory / forks / last health
                 memory = inst.get("memory") or inst.get("mem")
                 forks = inst.get("forks")
                 if forks is None:
@@ -815,40 +804,63 @@ def run_dashboard(
                     or inst.get("last_isolated_check")
                 )
 
-                details = []
+                details_parts = []
+                if node_type:
+                    details_parts.append(node_type)
+                if node_state:
+                    details_parts.append(node_state)
+
+                memfork_parts = []
                 if memory is not None:
-                    details.append(f"mem={memory}")
+                    memfork_parts.append(f"mem={memory}")
                 if forks is not None:
-                    details.append(f"forks={forks}")
+                    memfork_parts.append(
+                        forks if isinstance(forks, str) else f"forks={forks}"
+                    )
+                if memfork_parts:
+                    details_parts.append(" ".join(memfork_parts))
                 if last_health:
                     last_str = str(last_health)
                     if len(last_str) > 32:
                         last_str = last_str[:29] + "..."
-                    details.append(f"last={last_str}")
-
-                if details:
-                    det_line = "    " + "  ".join(details)
-                    stdscr.addstr(
-                        row, 0,
-                        det_line[:w - 1],
-                        color_for_class.get(cls, curses.color_pair(5)),
-                    )
-                    row += 1
+                    details_parts.append(f"last={last_str}")
 
                 errors_field = inst.get("errors")
-                if errors_field and row < h:
-                    err_str = str(errors_field)
-                    err_str = " ".join(err_str.split())
+                err_str = None
+                if errors_field:
+                    err_str = " ".join(str(errors_field).split())
                     max_err_width = max(10, w - 8)
                     if len(err_str) > max_err_width:
                         err_str = err_str[: max_err_width - 3] + "..."
-                    err_line = f"    error: {err_str}"
-                    stdscr.addstr(
-                        row, 0,
-                        err_line[:w - 1],
-                        color_for_class.get(cls, curses.color_pair(5)),
-                    )
+
+                base = f"  {name:{name_width}} [{status_str:7}]"
+                details_str = ""
+                if details_parts:
+                    details_str = "  (" + ", ".join(details_parts) + ")"
+                err_piece = f"  error: {err_str}" if err_str else ""
+
+                combined = base + details_str + err_piece
+
+                color = color_for_class.get(cls, curses.color_pair(5))
+
+                if len(combined) <= w - 1:
+                    # Everything fits on one line
+                    stdscr.addstr(row, 0, combined[: w - 1], color)
                     row += 1
+                else:
+                    # Multi-line fallback
+                    stdscr.addstr(row, 0, base[: w - 1], color)
+                    row += 1
+                    if row >= h:
+                        break
+                    if details_str:
+                        stdscr.addstr(row, 0, ("    " + details_str.strip())[0: w - 1], color)
+                        row += 1
+                    if row >= h:
+                        break
+                    if err_piece:
+                        stdscr.addstr(row, 0, ("    " + err_piece.strip())[0: w - 1], color)
+                        row += 1
 
             if inst_error and row < h:
                 stdscr.addstr(
@@ -859,7 +871,7 @@ def run_dashboard(
                 row += 1
 
             # ------------------------------------------------------------------
-            # Recent jobs section (newest first by ID)
+            # Recent jobs section (newest first by ID, running first)
             # ------------------------------------------------------------------
             def job_sort_key(j):
                 try:
@@ -868,12 +880,33 @@ def run_dashboard(
                     return 0
 
             jobs_sorted = sorted(jobs, key=job_sort_key, reverse=True)
-            len_jobs = len(jobs_sorted)
+
+            running_jobs = []
+            other_jobs = []
+            for j in jobs_sorted:
+                st = str(j.get("status") or "").lower()
+                if st == "running":
+                    running_jobs.append(j)
+                else:
+                    other_jobs.append(j)
+
+            # Build display rows: ("job", job) or ("sep", None)
+            display_jobs = []
+            for j in running_jobs:
+                display_jobs.append(("job", j))
+            if running_jobs and other_jobs:
+                display_jobs.append(("sep", None))
+            for j in other_jobs:
+                display_jobs.append(("job", j))
+
+            len_display = len(display_jobs)
+            job_indices = [i for i, (kind, _) in enumerate(display_jobs) if kind == "job"]
+            job_count = len(job_indices)
 
             if row < h:
                 stdscr.addstr(
                     row, 0,
-                    "Recent jobs (newest first by ID):",
+                    "Recent jobs (running first, newest by ID):",
                     curses.color_pair(5),
                 )
                 row += 1
@@ -884,39 +917,52 @@ def run_dashboard(
                 row += 1
 
             jobs_row_start = row
-            max_visible_jobs = max(0, h - jobs_row_start - 1)  # leave space for errors
+            max_visible_rows = max(0, h - jobs_row_start - 1)  # leave space for errors
 
             # Clamp selection/scroll
-            if len_jobs == 0:
+            if job_count == 0:
                 job_scroll = 0
                 job_selected = 0
                 job_selection_active = False
             else:
-                if job_selected >= len_jobs:
-                    job_selected = len_jobs - 1
-                if job_selected < 0:
-                    job_selected = 0
+                # Ensure selected row is a valid job row
+                if not (0 <= job_selected < len_display) or display_jobs[job_selected][0] != "job":
+                    job_selected = job_indices[0]
 
-                if max_visible_jobs > 0:
-                    max_scroll = max(0, len_jobs - max_visible_jobs)
+                # Clamp scroll to display rows
+                if max_visible_rows > 0:
+                    max_scroll = max(0, len_display - max_visible_rows)
                     if job_scroll > max_scroll:
                         job_scroll = max_scroll
                     if job_selected < job_scroll:
                         job_scroll = job_selected
-                    if job_selected >= job_scroll + max_visible_jobs:
-                        job_scroll = max(0, job_selected - max_visible_jobs + 1)
+                    if job_selected >= job_scroll + max_visible_rows:
+                        job_scroll = max(0, job_selected - max_visible_rows + 1)
                 else:
                     job_scroll = 0
 
-            visible_jobs = []
-            if max_visible_jobs > 0 and len_jobs > 0:
-                visible_jobs = jobs_sorted[job_scroll: job_scroll + max_visible_jobs]
+            visible_rows = []
+            if max_visible_rows > 0 and len_display > 0:
+                visible_rows = display_jobs[job_scroll: job_scroll + max_visible_rows]
 
-            for idx, job in enumerate(visible_jobs):
+            for idx, (kind, payload) in enumerate(visible_rows):
                 if row >= h:
                     break
 
                 global_index = job_scroll + idx
+
+                if kind == "sep":
+                    # Separator between running and other jobs
+                    sep_text = "---- other jobs ----"
+                    stdscr.addstr(
+                        row, 0,
+                        sep_text[:w - 1],
+                        curses.color_pair(5) | curses.A_DIM,
+                    )
+                    row += 1
+                    continue
+
+                job = payload
                 jid = job.get("id")
                 status = job.get("status") or "?"
                 status_str = str(status)
@@ -991,38 +1037,90 @@ def run_dashboard(
             if ch == -1:
                 continue
 
+            if ch == curses.KEY_RESIZE:
+                # Terminal resized; just loop and redraw with new size
+                continue
+
             # Quit
             if ch in (ord("q"), ord("Q"), 27):
                 break
 
-            # Navigation only if jobs exist
-            if len_jobs > 0:
+            # Helper to find first/last job row index
+            def first_job_index():
+                return job_indices[0] if job_indices else 0
+
+            def last_job_index():
+                return job_indices[-1] if job_indices else 0
+
+            # Navigation only if there are job rows
+            if job_count > 0:
                 if ch == curses.KEY_UP:
                     job_selection_active = True
-                    if job_selected > 0:
-                        job_selected -= 1
+                    # move to previous job row (skipping separator)
+                    i = job_selected - 1
+                    while i >= 0:
+                        if display_jobs[i][0] == "job":
+                            job_selected = i
+                            break
+                        i -= 1
                 elif ch == curses.KEY_DOWN:
                     job_selection_active = True
-                    if job_selected < len_jobs - 1:
-                        job_selected += 1
+                    i = job_selected + 1
+                    while i < len_display:
+                        if display_jobs[i][0] == "job":
+                            job_selected = i
+                            break
+                        i += 1
                 elif ch == curses.KEY_PPAGE:  # PgUp
                     job_selection_active = True
-                    if max_visible_jobs > 0:
-                        job_selected = max(0, job_selected - max_visible_jobs)
+                    if max_visible_rows > 0:
+                        # move scroll up a page and select first job in that window
+                        job_scroll = max(0, job_scroll - max_visible_rows)
+                        for i in range(job_scroll, len_display):
+                            if display_jobs[i][0] == "job":
+                                job_selected = i
+                                break
                     else:
-                        job_selected = 0
+                        job_selected = first_job_index()
+                        job_scroll = 0
                 elif ch == curses.KEY_NPAGE:  # PgDn
                     job_selection_active = True
-                    if max_visible_jobs > 0:
-                        job_selected = min(len_jobs - 1, job_selected + max_visible_jobs)
+                    if max_visible_rows > 0:
+                        max_scroll = max(0, len_display - max_visible_rows)
+                        job_scroll = min(max_scroll, job_scroll + max_visible_rows)
+                        # select first job in this window, or last job if none
+                        selected = None
+                        for i in range(job_scroll, min(len_display, job_scroll + max_visible_rows)):
+                            if display_jobs[i][0] == "job":
+                                selected = i
+                                break
+                        if selected is None:
+                            job_selected = last_job_index()
+                        else:
+                            job_selected = selected
                     else:
-                        job_selected = len_jobs - 1
+                        job_selected = last_job_index()
+                elif ch == curses.KEY_HOME:
+                    # Go to first page / first job
+                    job_selection_active = True
+                    job_scroll = 0
+                    job_selected = first_job_index()
+                elif ch == curses.KEY_END:
+                    # Go to last page / last job
+                    job_selection_active = True
+                    last_idx = last_job_index()
+                    if max_visible_rows > 0:
+                        job_scroll = max(0, last_idx - max_visible_rows + 1)
+                    job_selected = last_idx
 
             # 'v' to view job:
             if ch in (ord("v"), ord("V")):
                 job_id = None
-                if job_selection_active and len_jobs > 0 and 0 <= job_selected < len_jobs:
-                    job_id = jobs_sorted[job_selected].get("id")
+                if job_selection_active and job_count > 0 and \
+                        0 <= job_selected < len_display and \
+                        display_jobs[job_selected][0] == "job":
+                    job_obj = display_jobs[job_selected][1]
+                    job_id = job_obj.get("id")
                 else:
                     job_id = prompt_for_job_id(stdscr)
 
@@ -1100,3 +1198,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
