@@ -7,7 +7,7 @@ class Inventory(OrjsonModel):
     id: int
     name: str
     description: Optional[str] = None
-    kind: Optional[str] = None  # 'smart' | 'constructed' | None
+    kind: Optional[str] = None
     variables: Optional[str] = None
     summary_fields: Optional[SummaryFields] = None
 

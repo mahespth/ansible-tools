@@ -4,7 +4,11 @@ from .app import AAPTui
 app = typer.Typer()
 
 @app.command(help="Open a Job Detail screen and follow logs.")
-def job(job_id: int, base: str = typer.Option(...), token: str = typer.Option(...)):
+def job(
+    job_id: int = typer.Option(..., "--job-id", "-j", help="Controller Job ID to open"),
+    base: str = typer.Option(..., help="Controller base URL, e.g. https://host/api/v2"),
+    token: str = typer.Option(..., help="Bearer token"),
+):
     ui = AAPTui(base_url=base, token=token)
     ui.call_after_refresh(lambda: ui.open_job_detail(job_id))
     ui.run()

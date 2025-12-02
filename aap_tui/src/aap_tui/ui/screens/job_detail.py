@@ -6,7 +6,7 @@ from typing import Optional
 
 from textual.app import ComposeResult
 from textual.screen import Screen
-from textual.widgets import Header, Footer, Label, TextLog
+from textual.widgets import Header, Footer, Label, Log
 
 from ...services.controller import ControllerClient
 from ...models.jobs import Job, JobEvent
@@ -33,21 +33,19 @@ class JobDetailScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Label(f"Job #{self.job_id}", id="job-title")
-        yield TextLog(id="stdout", highlight=True, wrap=True)
+        yield Log(id="stdout", highlight=True)
         yield Footer()
 
     @property
-    def log(self) -> TextLog:
-        return self.query_one("#stdout", TextLog)
+    def log_widget(self) -> Log:
+        return self.query_one("#stdout", Log)
 
     async def on_mount(self) -> None:
         job_raw = await asyncio.to_thread(self.client.job, self.job_id)
         job = Job.model_validate(job_raw)
         self._terminal = job.is_terminal
         self.query_one("#job-title", Label).update(f"Job #{job.id} — {job.name} [{job.status}]")
-
         await self._fetch_append_events()
-
         self._status_task = asyncio.create_task(self._status_watch_loop())
         if self.follow_enabled and not self._terminal:
             self._poll_task = asyncio.create_task(self._event_follow_loop())
@@ -96,7 +94,7 @@ class JobDetailScreen(Screen):
             evt = JobEvent.model_validate(raw)
             if evt.counter <= self._last_counter:
                 continue
-            self.log.write(evt.stdout.rstrip("\n"))
+            self.log_widget.write_line(evt.stdout.rstrip("\n"))
             self._last_counter = max(self._last_counter, evt.counter)
             count += 1
         return count
@@ -115,7 +113,7 @@ class JobDetailScreen(Screen):
         path = f"job_{self.job_id}_stdout.txt"
         with open(path, "w", encoding="utf-8") as f:
             f.write(txt)
-        self.log.write(f"\n[Saved] {path}")
+        self.log_widget.write_line(f"\n[Saved] {path}")
 
     async def action_focus_search(self):
-        self.log.write("[Search not yet implemented — TODO]")
+        self.log_widget.write_line("[Search not yet implemented — TODO]")
