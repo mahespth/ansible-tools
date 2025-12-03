@@ -1,0 +1,17 @@
+resource {{ drbd_resource_name }} {
+  protocol {{ drbd_protocol }};
+
+  net {
+    cram-hmac-alg "sha1";
+    shared-secret "CHANGEME-DRBD-SECRET";  # change this
+  }
+
+{% for host in groups['drbd_cluster'] %}
+  on {{ hostvars[host].inventory_hostname }} {
+    device {{ drbd_device }};
+    disk   {{ hostvars[host].drbd_disk }};
+    address {{ hostvars[host].drbd_addr }}:{{ drbd_port }};
+    meta-disk internal;
+  }
+{% endfor %}
+}
