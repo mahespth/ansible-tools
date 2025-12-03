@@ -1,0 +1,108 @@
+---
+- name: Install and configure DRBD volume (async) on RHEL 9
+  hosts: drbd_cluster
+  become: true
+  vars:
+    drbd_resource_name: r0
+    drbd_device: /dev/drbd0
+    drbd_port: 7788
+    drbd_protocol: A          # A = async, B/C = more synchronous
+    drbd_fs_type: xfs
+    drbd_mountpoint: /mnt/drbd_r0
+
+  pre_tasks:
+    - name: Ensure ELRepo GPG key is installed (for DRBD kmod)
+    ansible.builtin.rpm_key:
+      state: present
+      key: https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
+
+    - name: Install ELRepo release package (RHEL 9)
+      ansible.builtin.dnf:
+        name: https://www.elrepo.org/elrepo-release-9.el9.elrepo.noarch.rpm
+        state: present
+
+    - name: Install DRBD kernel module and utilities
+      ansible.builtin.dnf:
+        name:
+          - kmod-drbd9x
+          - drbd9x-utils
+        state: present
+      register: drbd_pkgs
+
+  tasks:
+    - name: Load DRBD kernel modules
+      ansible.builtin.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - drbd
+        - drbd_transport_tcp
+
+    - name: Ensure DRBD config directory exists
+      ansible.builtin.file:
+        path: /etc/drbd.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy DRBD resource configuration
+      ansible.builtin.template:
+        src: drbd-resource.res.j2
+        dest: "/etc/drbd.d/{{ drbd_resource_name }}.res"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: adjust drbd resource
+
+    # WARNING: destructive – wipes metadata on the backing disk on first run
+    - name: Initialize DRBD metadata on each node (one-time)
+      ansible.builtin.shell: |
+        set -e
+        drbdadm create-md {{ drbd_resource_name }}
+        touch /var/lib/drbd/{{ drbd_resource_name }}_meta_created
+      args:
+        creates: "/var/lib/drbd/{{ drbd_resource_name }}_meta_created"
+
+    - name: Bring up DRBD resource on each node
+      ansible.builtin.command: >
+        drbdadm up {{ drbd_resource_name }}
+
+    - name: Enable and start DRBD resource target
+      ansible.builtin.systemd:
+        name: "drbd@{{ drbd_resource_name }}.target"
+        enabled: true
+        state: started
+
+    # PRIMARY NODE ONLY: promote, create filesystem, and mount
+
+    - name: Promote DRBD resource to primary on primary node
+      ansible.builtin.command: >
+        drbdadm primary --force {{ drbd_resource_name }}
+      when: drbd_role == "primary"
+
+    - name: Create filesystem on DRBD device (idempotent)
+      ansible.builtin.filesystem:
+        fstype: "{{ drbd_fs_type }}"
+        dev: "{{ drbd_device }}"
+      when: drbd_role == "primary"
+
+    - name: Create mount point
+      ansible.builtin.file:
+        path: "{{ drbd_mountpoint }}"
+        state: directory
+        mode: "0755"
+
+    - name: Add fstab entry and mount DRBD filesystem (primary only)
+      ansible.builtin.mount:
+        path: "{{ drbd_mountpoint }}"
+        src: "{{ drbd_device }}"
+        fstype: "{{ drbd_fs_type }}"
+        opts: "defaults,_netdev,x-systemd.requires=drbd@{{ drbd_resource_name }}.target"
+        state: mounted
+      when: drbd_role == "primary"
+
+  handlers:
+    - name: adjust drbd resource
+      ansible.builtin.command: >
+        drbdadm adjust {{ drbd_resource_name }}
