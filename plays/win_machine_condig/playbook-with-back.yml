@@ -1,0 +1,9 @@
+- name: Update server2, custom backup path/name
+  win_machine_config:
+    path: C:\configs\machines.txt
+    name: server2
+    attributes:
+      ip: 10.0.2.30
+    backup: true
+    backup_path: C:\configs\backups
+    backup_name: machines-{{ inventory_hostname }}.bak
