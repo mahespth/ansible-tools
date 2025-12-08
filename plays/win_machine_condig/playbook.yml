@@ -1,5 +1,5 @@
 - name: Manage machine block
-- hosts: windows
+  hosts: windows
   gather_facts: false
 
   tasks:
