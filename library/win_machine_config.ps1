@@ -58,7 +58,7 @@
     timestamp: "<original_basename>.<timestamp>".
 
 .NOTES
-    Author: Your Name <you@example.com>
+    Author: Steve Maher <steve@m4her.com>
     Module: win_machine_config
     Requires: Windows Server 2016+ (PowerShell 5+), Ansible.Basic
 
