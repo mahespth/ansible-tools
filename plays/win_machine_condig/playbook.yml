@@ -1,0 +1,18 @@
+- name: Manage machine block
+- hosts: windows
+  gather_facts: false
+
+  tasks:
+    - name: Ensure server1 block exists
+      win_machine_config:
+        path: C:\configs\machines.txt
+        name: server1
+        attributes:
+          ip: 10.0.1.20
+          os: windows
+          role: web
+          env: prod
+        state: present
+        mode: replace
+        backup: true
+
