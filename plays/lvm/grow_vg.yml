@@ -1,0 +1,146 @@
+---
+- name: Grow VMware disk backing an LVM VG, then grow LVM in guest
+  hosts: linux_vms
+  gather_facts: false
+  become: true
+
+  vars:
+    # --- Inputs you set in AWX extra_vars / inventory ---
+    vg_name: data_vg
+    # Option A: grow the PV/VG only (leave LV alone)
+    # grow_lv: false
+
+    # Option B: also grow a specific LV + filesystem
+    grow_lv: true
+    lv_path: "/dev/data_vg/data_lv"   # or /dev/mapper/data_vg-data_lv
+
+    # Desired *virtual disk* size (GB) you want in VMware
+    desired_disk_size_gb: 500
+
+    # VMware connection (from AWX credential injection or extra_vars)
+    vmware_hostname: "{{ lookup('env','VMWARE_HOST') | default(omit) }}"
+    vmware_username: "{{ lookup('env','VMWARE_USER') | default(omit) }}"
+    vmware_password: "{{ lookup('env','VMWARE_PASSWORD') | default(omit) }}"
+    vmware_validate_certs: false
+
+    # For ESXi standalone: datacenter is usually ha-datacenter
+    vmware_datacenter: "ha-datacenter"
+    vmware_folder: "/ha-datacenter/vm"
+    vm_name: "{{ inventory_hostname }}"
+
+  tasks:
+    - name: Find PV device(s) for VG
+      ansible.builtin.command: >
+        pvs --noheadings --separator ' ' -o pv_name --select vg_name={{ vg_name }}
+      register: pvs_out
+      changed_when: false
+
+    - name: Pick first PV (adjust if your VG spans multiple PVs)
+      ansible.builtin.set_fact:
+        pv_device: "{{ (pvs_out.stdout_lines | map('trim') | reject('equalto','') | list)[0] }}"
+
+    - name: Get base disk (PKNAME) for PV (handles /dev/sdb2 -> sdb)
+      ansible.builtin.command: "lsblk -no PKNAME {{ pv_device }}"
+      register: pkname_out
+      changed_when: false
+
+    - name: Set base disk path
+      ansible.builtin.set_fact:
+        base_disk: "/dev/{{ pkname_out.stdout | trim }}"
+
+    - name: Get current base disk size (bytes)
+      ansible.builtin.command: "lsblk -b -dn -o SIZE {{ base_disk }}"
+      register: disksize_out
+      changed_when: false
+
+    - name: Compute current size in GB (floor)
+      ansible.builtin.set_fact:
+        current_disk_size_gb: "{{ (disksize_out.stdout | int // (1024**3)) }}"
+
+    - name: Find /dev/disk/by-path symlink for this base disk (SCSI mapping)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        real="$(readlink -f {{ base_disk }})"
+        ls -l /dev/disk/by-path | awk -v r="$real" '$NF==r {print $9}' | head -n1
+      args:
+        executable: /bin/bash
+      register: bypath_out
+      changed_when: false
+
+    - name: Parse SCSI address from by-path (expects ...-scsi-H:C:T:L)
+      ansible.builtin.set_fact:
+        scsi_host: "{{ (bypath_out.stdout | regex_search('scsi-(\\d+):(\\d+):(\\d+):(\\d+)', '\\1')) | int }}"
+        scsi_target: "{{ (bypath_out.stdout | regex_search('scsi-(\\d+):(\\d+):(\\d+):(\\d+)', '\\3')) | int }}"
+
+    - name: Show what we think the VMware address is
+      ansible.builtin.debug:
+        msg:
+          - "VG={{ vg_name }} PV={{ pv_device }} base_disk={{ base_disk }}"
+          - "by-path={{ bypath_out.stdout }}"
+          - "VMware mapping guess: scsi_controller(bus)={{ scsi_host }}, unit_number={{ scsi_target }}"
+          - "Current disk size: {{ current_disk_size_gb }} GB, desired: {{ desired_disk_size_gb }} GB"
+
+    - name: Expand VMware disk if it is smaller than desired
+      delegate_to: localhost
+      become: false
+      when: current_disk_size_gb | int < desired_disk_size_gb | int
+      community.vmware.vmware_guest_disk:
+        hostname: "{{ vmware_hostname }}"
+        username: "{{ vmware_username }}"
+        password: "{{ vmware_password }}"
+        validate_certs: "{{ vmware_validate_certs }}"
+        datacenter: "{{ vmware_datacenter }}"
+        folder: "{{ vmware_folder }}"
+        name: "{{ vm_name }}"
+        disk:
+          - state: present
+            size_gb: "{{ desired_disk_size_gb | int }}"
+            scsi_controller: "{{ scsi_host | int }}"
+            unit_number: "{{ scsi_target | int }}"
+      register: disk_change
+
+    - name: Rescan the disk in Linux (kernel notices new size)
+      when: current_disk_size_gb | int < desired_disk_size_gb | int
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo 1 > /sys/class/block/{{ base_disk | regex_replace('^/dev/','') }}/device/rescan
+      args:
+        executable: /bin/bash
+
+    - name: If PV is a partition, grow the partition to fill the disk (requires growpart)
+      when:
+        - current_disk_size_gb | int < desired_disk_size_gb | int
+        - pv_device is match('^/dev/[a-z]+d[a-z]+[0-9]+$') or pv_device is match('^/dev/nvme[0-9]+n[0-9]+p[0-9]+$')
+      ansible.builtin.shell: |
+        set -euo pipefail
+        partnum="$(lsblk -no PARTNUM {{ pv_device }})"
+        growpart {{ base_disk }} "${partnum}"
+        partprobe {{ base_disk }}
+      args:
+        executable: /bin/bash
+
+    - name: pvresize (make LVM see the extra space)
+      when: current_disk_size_gb | int < desired_disk_size_gb | int
+      ansible.builtin.command: "pvresize {{ pv_device }}"
+      register: pvresize_out
+
+    - name: If requested, grow LV to consume all free space and resize filesystem
+      when:
+        - grow_lv | bool
+        - current_disk_size_gb | int < desired_disk_size_gb | int
+      block:
+        - name: Extend LV to all free space
+          ansible.builtin.command: "lvextend -l +100%FREE {{ lv_path }}"
+
+        - name: Grow filesystem (xfs vs ext*)
+          ansible.builtin.shell: |
+            set -euo pipefail
+            fstype="$(findmnt -no FSTYPE -S {{ lv_path }})"
+            mnt="$(findmnt -no TARGET -S {{ lv_path }})"
+            if [ "$fstype" = "xfs" ]; then
+              xfs_growfs "$mnt"
+            else
+              resize2fs "{{ lv_path }}"
+            fi
+          args:
+            executable: /bin/bash
