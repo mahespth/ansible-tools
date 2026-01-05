@@ -1,0 +1,35 @@
+---
+# Generic "get all pages" helper:
+# - expects: url_in, results_var, validate_certs_in, token_in
+# - sets:   <results_var> as a flat list
+
+- name: Init pagination state
+  ansible.builtin.set_fact:
+    _next_url: "{{ url_in }}"
+    _results: []
+
+- name: Paginate until next is null
+  block:
+    - name: GET page
+      ansible.builtin.uri:
+        url: "{{ _next_url }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ token_in }}"
+          Accept: "application/json"
+        return_content: true
+        status_code: 200
+        validate_certs: "{{ validate_certs_in }}"
+      register: _page
+
+    - name: Append results and advance next pointer
+      ansible.builtin.set_fact:
+        _results: "{{ _results + (_page.json.results | default([])) }}"
+        _next_url: "{{ _page.json.next }}"
+  until: _next_url is none
+  retries: 1000
+  delay: 0
+
+- name: Publish results
+  ansible.builtin.set_fact:
+    "{{ results_var }}": "{{ _results }}"
