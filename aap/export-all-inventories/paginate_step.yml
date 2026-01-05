@@ -1,0 +1,17 @@
+---
+- name: GET page
+  ansible.builtin.uri:
+    url: "{{ _next_url }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ token_in }}"
+      Accept: "application/json"
+    return_content: true
+    status_code: 200
+    validate_certs: "{{ validate_certs_in }}"
+  register: _page
+
+- name: Append results and advance next pointer
+  ansible.builtin.set_fact:
+    _results: "{{ _results + (_page.json.results | default([])) }}"
+    _next_url: "{{ _page.json.next }}"
