@@ -1,0 +1,72 @@
+---
+- name: Get inventory detail
+  ansible.builtin.uri:
+    url: "{{ api_base }}/inventories/{{ inv_id }}/"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ aap_token }}"
+      Accept: "application/json"
+    return_content: true
+    status_code: 200
+    validate_certs: "{{ validate_certs }}"
+  register: inv_detail
+
+- name: Get inventory hosts (paginated)
+  ansible.builtin.include_tasks: paginate_get.yml
+  vars:
+    url_in: "{{ api_base }}/inventories/{{ inv_id }}/hosts/?page_size={{ page_size }}"
+    results_var: "inv_hosts"
+    validate_certs_in: "{{ validate_certs }}"
+    token_in: "{{ aap_token }}"
+
+- name: Get inventory groups (paginated)
+  ansible.builtin.include_tasks: paginate_get.yml
+  vars:
+    url_in: "{{ api_base }}/inventories/{{ inv_id }}/groups/?page_size={{ page_size }}"
+    results_var: "inv_groups"
+    validate_certs_in: "{{ validate_certs }}"
+    token_in: "{{ aap_token }}"
+
+- name: Get inventory sources (paginated)
+  ansible.builtin.include_tasks: paginate_get.yml
+  vars:
+    url_in: "{{ api_base }}/inventories/{{ inv_id }}/inventory_sources/?page_size={{ page_size }}"
+    results_var: "inv_sources"
+    validate_certs_in: "{{ validate_certs }}"
+    token_in: "{{ aap_token }}"
+
+- name: Optionally fetch group membership (hosts + children per group)
+  when: include_group_membership | bool
+  block:
+    - name: Init group_membership list
+      ansible.builtin.set_fact:
+        group_membership: []
+
+    - name: Fetch membership per group
+      ansible.builtin.include_tasks: export_one_group_membership.yml
+      loop: "{{ inv_groups }}"
+      loop_control:
+        label: "{{ item.name }} (id={{ item.id }})"
+      vars:
+        group_id: "{{ item.id }}"
+        group_name: "{{ item.name }}"
+
+- name: Build snapshot document
+  ansible.builtin.set_fact:
+    inv_snapshot:
+      exported_at: "{{ lookup('pipe','date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      aap_host: "{{ aap_host }}"
+      controller_api_prefix: "{{ controller_api_prefix }}"
+      inventory: "{{ inv_detail.json }}"
+      hosts: "{{ inv_hosts }}"
+      groups: "{{ inv_groups }}"
+      inventory_sources: "{{ inv_sources }}"
+      group_membership: "{{ group_membership | default([]) }}"
+
+- name: Write per-inventory snapshot
+  ansible.builtin.copy:
+    dest: >-
+      {{ out_dir }}/inv_{{ inv_id }}_{{ (inv_name | default('unknown'))
+        | regex_replace('[^A-Za-z0-9_.-]+','_') }}.json
+    content: "{{ inv_snapshot | to_nice_json }}"
+    mode: "0640"
