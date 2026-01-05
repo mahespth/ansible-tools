@@ -1,0 +1,52 @@
+---
+
+# Steve Maher, export all inventories
+# runs on hosts: all as expected you will pass in only the
+# the host you want this to execute on.
+# --------------------------------------------------
+
+- name: Export all inventories from AAP Controller
+  hosts: all
+  gather_facts: false
+
+  vars:
+    controller_host: "{{ lookup('env', 'CONTROLLER_HOST') | default('', true) }}"
+    controller_oauthtoken: "{{ lookup('env', 'CONTROLLER_OAUTH_TOKEN') | default('', true) }}"
+    snapshot_tag: "{{ snapshot_tag | default('before_refresh') }}"
+    out_dir: "{{ out_dir | default('./snapshots') }}"
+    out_file: "{{ out_dir }}/inventories-{{ snapshot_tag }}.json"
+
+  tasks:
+    - name: Sanity check env vars
+      ansible.builtin.assert:
+        that:
+          - controller_host | length > 0
+          - controller_oauthtoken | length > 0
+        fail_msg: >
+          Set CONTROLLER_HOST and CONTROLLER_OAUTH_TOKEN (admin token).
+          Example:
+          export CONTROLLER_HOST=https://aap.example.com
+          export CONTROLLER_OAUTH_TOKEN=xxxxxxxx
+
+    - name: Ensure output directory exists
+      ansible.builtin.file:
+        path: "{{ out_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Export all inventories
+      awx.awx.export:
+        controller_host: "{{ controller_host }}"
+        controller_oauthtoken: "{{ controller_oauthtoken }}"
+        inventory: "all"
+      register: export_out
+
+    - name: Write export JSON to disk
+      ansible.builtin.copy:
+        dest: "{{ out_file }}"
+        content: "{{ export_out.assets | to_nice_json }}"
+        mode: "0640"
+
+    - name: Show where it was written
+      ansible.builtin.debug:
+        msg: "Wrote {{ out_file }}"
