@@ -1,0 +1,66 @@
+---
+
+# Steve Maher
+# Export only using the api where we are running on systems 
+# where the awxkit may not be available.
+
+- name: Export all inventories from AAP Controller API (no awxkit)
+  hosts: all
+  gather_facts: false
+
+  vars:
+    # Required (set via env is easiest)
+    aap_host: "{{ lookup('env', 'AAP_HOST') | default('', true) }}"
+    aap_token: "{{ lookup('env', 'AAP_TOKEN') | default('', true) }}"
+
+    # Pick ONE depending on what URL you’re calling:
+    # - Platform Gateway: /api/controller/v2
+    # - Direct controller: /api/v2
+    controller_api_prefix: "{{ controller_api_prefix | default('/api/controller/v2') }}"
+
+    validate_certs: "{{ validate_certs | default(true) }}"
+    page_size: "{{ page_size | default(200) }}"
+
+    snapshot_tag: "{{ snapshot_tag | default('before') }}"
+    out_dir: "{{ out_dir | default('./snapshots/' ~ snapshot_tag) }}"
+
+    # If true: fetch per-group hosts + children (more complete, more API calls)
+    include_group_membership: "{{ include_group_membership | default(true) }}"
+
+  tasks:
+    - name: Sanity check inputs
+      ansible.builtin.assert:
+        that:
+          - aap_host | length > 0
+          - aap_token | length > 0
+          - controller_api_prefix in ['/api/controller/v2', '/api/v2']
+        fail_msg: >
+          Set AAP_HOST and AAP_TOKEN.
+          Also set controller_api_prefix to either /api/controller/v2 (gateway) or /api/v2 (direct controller).
+
+    - name: Ensure output directory exists
+      ansible.builtin.file:
+        path: "{{ out_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Build base URL
+      ansible.builtin.set_fact:
+        api_base: "{{ aap_host.rstrip('/') ~ controller_api_prefix }}"
+
+    - name: Get all inventories (paginated)
+      ansible.builtin.include_tasks: paginate_get.yml
+      vars:
+        url_in: "{{ api_base }}/inventories/?page_size={{ page_size }}"
+        results_var: "inventories"
+        validate_certs_in: "{{ validate_certs }}"
+        token_in: "{{ aap_token }}"
+
+    - name: Export each inventory to its own JSON file
+      ansible.builtin.include_tasks: export_one_inventory.yml
+      loop: "{{ inventories }}"
+      loop_control:
+        label: "{{ item.name }} (id={{ item.id }})"
+      vars:
+        inv_id: "{{ item.id }}"
+        inv_name: "{{ item.name }}"
