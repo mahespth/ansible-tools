@@ -1,0 +1,26 @@
+---
+- name: Get group hosts (paginated)
+  ansible.builtin.include_tasks: paginate_get.yml
+  vars:
+    url_in: "{{ api_base }}/groups/{{ group_id }}/hosts/?page_size={{ page_size }}"
+    results_var: "_group_hosts"
+    validate_certs_in: "{{ validate_certs }}"
+    token_in: "{{ aap_token }}"
+
+- name: Get group children (paginated)
+  ansible.builtin.include_tasks: paginate_get.yml
+  vars:
+    url_in: "{{ api_base }}/groups/{{ group_id }}/children/?page_size={{ page_size }}"
+    results_var: "_group_children"
+    validate_certs_in: "{{ validate_certs }}"
+    token_in: "{{ aap_token }}"
+
+- name: Append group membership record
+  ansible.builtin.set_fact:
+    group_membership: >-
+      {{ group_membership + [{
+        "group_id": group_id,
+        "group_name": group_name,
+        "hosts": _group_hosts,
+        "children": _group_children
+      }] }}
