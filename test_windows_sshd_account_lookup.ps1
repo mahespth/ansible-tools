@@ -21,7 +21,7 @@ public class Advapi32 {
 $systemName = $null  # Local system
 $accountName = "sshd"  # Replace with the account name you want to query
 $sid = New-Object byte[] 256  # Allocate space for the SID
-$sidSize = [uint32]256
+$sidSize = $sid.Length
 $domainName = New-Object System.Text.StringBuilder 256
 $domainNameSize = [uint32]256
 $sidType = [uint32]0
