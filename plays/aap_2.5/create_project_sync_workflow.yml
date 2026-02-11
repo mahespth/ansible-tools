@@ -1,0 +1,68 @@
+---
+
+# Steve Maher, AIXTreme Research Ltd.
+# ----------------------------------------
+# Create a project Sync workflow.
+
+- hosts: localhost
+  gather_facts: false
+  vars:
+    awx_host: https://awx.example.com
+    awx_token: "{{ lookup('env','AWX_TOKEN') }}"
+    org: "Default"
+
+    workflow_name: "Bulk Project Sync Workflow"
+
+    # Feed this list however you like (vars file, extra-vars, dynamic inventory, etc.)
+    projects_to_sync:
+      - "Project A"
+      - "Project B"
+      - "Project C"
+
+  tasks:
+    - name: Create (or update) the workflow job template
+      awx.awx.workflow_job_template:
+        name: "{{ workflow_name }}"
+        organization: "{{ org }}"
+        state: present
+        controller_host: "{{ awx_host }}"
+        controller_oauthtoken: "{{ awx_token }}"
+
+    # Optional: resolve project IDs (more robust than relying on names)
+    - name: Look up projects (by name) to get IDs
+      awx.awx.project:
+        name: "{{ item }}"
+        organization: "{{ org }}"
+        state: present   # ensures it exists; use state: exists if you prefer strict
+        controller_host: "{{ awx_host }}"
+        controller_oauthtoken: "{{ awx_token }}"
+      loop: "{{ projects_to_sync }}"
+      register: project_results
+
+    - name: Build a list of project IDs in order
+      set_fact:
+        project_id_list: "{{ project_results.results | map(attribute='id') | list }}"
+
+    - name: Create workflow nodes (project sync nodes)
+      awx.awx.workflow_job_template_node:
+        workflow_job_template: "{{ workflow_name }}"
+        identifier: "sync_{{ item.0 }}"
+        unified_job_template: "{{ item.1 }}"   # project id
+        state: present
+        controller_host: "{{ awx_host }}"
+        controller_oauthtoken: "{{ awx_token }}"
+      loop: "{{ range(0, project_id_list|length) | zip(project_id_list) | list }}"
+      register: node_results
+
+    # Link nodes in sequence: node[i] -> success -> node[i+1]
+    - name: Link nodes sequentially on success
+      awx.awx.workflow_job_template_node:
+        workflow_job_template: "{{ workflow_name }}"
+        identifier: "sync_{{ item }}"
+        success_nodes:
+          - "sync_{{ item + 1 }}"
+        state: present
+        controller_host: "{{ awx_host }}"
+        controller_oauthtoken: "{{ awx_token }}"
+      loop: "{{ range(0, (project_id_list|length) - 1) | list }}"
+      when: project_id_list|length > 1
