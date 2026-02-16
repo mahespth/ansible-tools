@@ -1,0 +1,102 @@
+---
+
+# Create basic graphana dashboard for the AAP jobs
+# Steve Maher, AIXtreme Reasearch ltd.
+# -------------------------------------------------
+- name: Provision Grafana dashboard for AAP Controller jobs
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    grafana_url: "https://grafana.example.com"
+    grafana_api_key: "{{ lookup('env', 'GRAFANA_API_KEY') }}"  
+    prometheus_ds_uid: "PROM_DS_UID"   # set to your Prometheus datasource UID in Grafana
+    folder_id: 0                       # or your folder ID
+
+    aap_dashboard:
+      uid: "aap-controller-jobs"
+      title: "AAP 2.5 - Automation Controller Jobs"
+      timezone: "browser"
+      schemaVersion: 39
+      version: 1
+      refresh: "30s"
+      tags: ["aap", "ansible", "controller"]
+      time:
+        from: "now-24h"
+        to: "now"
+      templating:
+        list:
+          - name: "hostname"
+            type: "query"
+            datasource:
+              type: "prometheus"
+              uid: "{{ prometheus_ds_uid }}"
+            query:
+              query: 'label_values(awx_instance_capacity, hostname)'
+            refresh: 2
+            includeAll: true
+            multi: true
+            current:
+              selected: true
+              text: "All"
+              value: "$__all"
+
+      panels:
+        - type: "stat"
+          title: "Running jobs (now)"
+          id: 1
+          gridPos: { x: 0, y: 0, w: 6, h: 4 }
+          targets:
+            - datasource: { type: "prometheus", uid: "{{ prometheus_ds_uid }}" }
+              expr: 'sum(awx_running_jobs_total{hostname=~"$hostname"})'
+          options:
+            reduceOptions: { calcs: ["lastNotNull"] }
+
+        - type: "stat"
+          title: "Pending jobs (now)"
+          id: 2
+          gridPos: { x: 6, y: 0, w: 6, h: 4 }
+          targets:
+            - datasource: { type: "prometheus", uid: "{{ prometheus_ds_uid }}" }
+              expr: 'sum(awx_pending_jobs_total{hostname=~"$hostname"})'
+          options:
+            reduceOptions: { calcs: ["lastNotNull"] }
+
+        - type: "timeseries"
+          title: "Jobs completed by status (rate)"
+          id: 3
+          gridPos: { x: 0, y: 4, w: 12, h: 8 }
+          targets:
+            - refId: "A"
+              datasource: { type: "prometheus", uid: "{{ prometheus_ds_uid }}" }
+              # If awx_status_total is monotonic in your environment, increase() gives “jobs per interval”.
+              expr: >
+                sum by (status) (
+                  increase(awx_status_total{hostname=~"$hostname", status=~"successful|failed|error|canceled"}[$__rate_interval])
+                )
+          options:
+            legend: { displayMode: "list", placement: "bottom" }
+
+        - type: "timeseries"
+          title: "Running vs Pending (over time)"
+          id: 4
+          gridPos: { x: 0, y: 12, w: 12, h: 8 }
+          targets:
+            - refId: "A"
+              datasource: { type: "prometheus", uid: "{{ prometheus_ds_uid }}" }
+              expr: 'sum(awx_running_jobs_total{hostname=~"$hostname"})'
+              legendFormat: "running"
+            - refId: "B"
+              datasource: { type: "prometheus", uid: "{{ prometheus_ds_uid }}" }
+              expr: 'sum(awx_pending_jobs_total{hostname=~"$hostname"})'
+              legendFormat: "pending"
+
+  tasks:
+    - name: Create/update dashboard
+      grafana.grafana.dashboard:
+        grafana_url: "{{ grafana_url }}"
+        grafana_api_key: "{{ grafana_api_key }}"
+        state: present
+        overwrite: true
+        folder_id: "{{ folder_id }}"
+        dashboard: "{{ aap_dashboard }}"
