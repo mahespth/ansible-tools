@@ -1,0 +1,19 @@
+---
+
+# Walk a webserver index page and return the paths.
+# ----------------------------------------------------
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Walk apache index
+      apache_index_walk:
+        url: "https://example.com/pub/"
+        depth: 3
+        extension: "iso"
+        paths_only: true
+      register: out
+
+    - debug:
+        var: out.files
+
+...
