@@ -1,0 +1,462 @@
+# bash completion for ansible-lint and ansible ad hoc commands
+#
+# Features
+# - ansible-lint option/value completion
+# - ansible module completion after -m/--module-name
+# - ansible inventory/path/common option completion
+# - ansible ad hoc argument-key completion after -a/--args using ansible-doc -j
+# - inventory-aware host/group completion for the ad hoc host pattern and --limit
+#
+# Install:
+#   source ./ansible-tools-completion.bash
+# or copy to /etc/bash_completion.d/
+
+# ------------------------------
+# Helpers
+# ------------------------------
+
+_ansible_tools__have() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+_ansible_tools__filedir() {
+    local IFS=$'\n'
+    COMPREPLY=( $(compgen -f -- "$1") )
+}
+
+_ansible_tools__dirnames() {
+    local IFS=$'\n'
+    COMPREPLY=( $(compgen -d -- "$1") )
+}
+
+_ansible_tools__contains_word() {
+    local needle="$1"
+    shift
+    local x
+    for x in "$@"; do
+        [[ "$x" == "$needle" ]] && return 0
+    done
+    return 1
+}
+
+_ansible_tools__prev_nonempty() {
+    local i
+    for (( i=COMP_CWORD-1; i>=0; i-- )); do
+        [[ -n "${COMP_WORDS[i]}" ]] && {
+            printf '%s' "${COMP_WORDS[i]}"
+            return 0
+        }
+    done
+    return 1
+}
+
+_ansible_tools__get_opt_arg() {
+    local short_opt="$1"
+    local long_opt="$2"
+    local i next
+    for (( i=1; i<COMP_CWORD; i++ )); do
+        case "${COMP_WORDS[i]}" in
+            "$short_opt"|"$long_opt")
+                next=$((i+1))
+                [[ $next -lt ${#COMP_WORDS[@]} ]] && printf '%s' "${COMP_WORDS[next]}"
+                return 0
+                ;;
+            "$long_opt"=*)
+                printf '%s' "${COMP_WORDS[i]#*=}"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+_ansible_tools__module_name() {
+    _ansible_tools__get_opt_arg -m --module-name
+}
+
+_ansible_tools__inventory_args() {
+    local i word next out=()
+    for (( i=1; i<COMP_CWORD; i++ )); do
+        word="${COMP_WORDS[i]}"
+        next=$((i+1))
+        case "$word" in
+            -i|--inventory)
+                if [[ $next -lt ${#COMP_WORDS[@]} && -n "${COMP_WORDS[next]}" ]]; then
+                    out+=("$word" "${COMP_WORDS[next]}")
+                    ((i++))
+                fi
+                ;;
+            --inventory=*)
+                out+=("-i" "${word#*=}")
+                ;;
+        esac
+    done
+    printf '%s\n' "${out[@]}"
+}
+
+_ansible_tools__ansible_modules() {
+    _ansible_tools__have ansible-doc || return 0
+    ansible-doc -t module -l 2>/dev/null | awk '{print $1}'
+}
+
+_ansible_tools__ansible_doc_json_keys() {
+    local module="$1"
+    [[ -z "$module" ]] && return 0
+    _ansible_tools__have ansible-doc || return 0
+    ansible-doc -t module -j "$module" 2>/dev/null | python3 - "$module" <<'PY'
+import json, sys
+module = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+entry = data.get(module) or next(iter(data.values()), {})
+opts = entry.get('doc', {}).get('options', {}) or {}
+for key in sorted(opts):
+    print(key + '=')
+PY
+}
+
+_ansible_tools__inventory_targets() {
+    _ansible_tools__have ansible-inventory || return 0
+
+    local inv_args=()
+    local line
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && inv_args+=("$line")
+    done < <(_ansible_tools__inventory_args)
+
+    ansible-inventory "${inv_args[@]}" --list 2>/dev/null | python3 - <<'PY'
+import json, sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+
+results = set()
+
+meta = data.get('_meta', {})
+hostvars = meta.get('hostvars', {}) if isinstance(meta, dict) else {}
+for host in hostvars:
+    if host:
+        results.add(host)
+
+def walk_group(name, node):
+    if name and name != '_meta':
+        results.add(name)
+    if isinstance(node, dict):
+        for host in node.get('hosts', []) or []:
+            if host:
+                results.add(host)
+        for child in node.get('children', []) or []:
+            if child:
+                results.add(child)
+
+for name, node in data.items():
+    walk_group(name, node)
+
+for item in sorted(results):
+    print(item)
+PY
+}
+
+_ansible_tools__complete_inventory_pattern() {
+    local cur="$1"
+    local prefix=""
+    local part="$cur"
+    local sep=''
+
+    case "$cur" in
+        *:*)
+            prefix="${cur%:*}:"
+            part="${cur##*:}"
+            sep=':'
+            ;;
+        *,*)
+            prefix="${cur%,*},"
+            part="${cur##*,}"
+            sep=','
+            ;;
+    esac
+
+    local base_targets="all localhost ungrouped"
+    local inv_targets
+    inv_targets="$(_ansible_tools__inventory_targets)"
+
+    local matches out=() m
+    matches=$(compgen -W "$base_targets $inv_targets" -- "$part")
+    while IFS= read -r m; do
+        [[ -n "$m" ]] || continue
+        out+=("$prefix$m")
+        if [[ -z "$sep" ]]; then
+            out+=("$m:")
+            out+=("$m,")
+        elif [[ "$sep" == ":" ]]; then
+            out+=("$prefix$m:")
+        elif [[ "$sep" == "," ]]; then
+            out+=("$prefix$m,")
+        fi
+    done <<< "$matches"
+
+    # Deduplicate while keeping order.
+    local dedup=() seen="|" item
+    for item in "${out[@]}"; do
+        [[ "$seen" == *"|$item|"* ]] && continue
+        seen+="$item|"
+        dedup+=("$item")
+    done
+    COMPREPLY=("${dedup[@]}")
+}
+
+_ansible_tools__complete_keyvalue_csv() {
+    local cur="$1"
+    shift
+    local values=("$@")
+    local prefix=""
+    local part="$cur"
+    if [[ "$cur" == *,* ]]; then
+        prefix="${cur%,*},"
+        part="${cur##*,}"
+    fi
+    local matches
+    matches=$(compgen -W "${values[*]}" -- "$part")
+    local out=() m
+    while IFS= read -r m; do
+        [[ -n "$m" ]] && out+=("$prefix$m")
+    done <<< "$matches"
+    COMPREPLY=("${out[@]}")
+}
+
+_ansible_tools__complete_ansible_argstring() {
+    local cur="$1"
+    local module="$2"
+
+    # JSON mode: do not try to be too clever.
+    [[ "$cur" == \{* ]] && return 0
+
+    local token_prefix=""
+    local current_piece="$cur"
+    if [[ "$cur" == *' '* ]]; then
+        token_prefix="${cur% *} "
+        current_piece="${cur##* }"
+    fi
+
+    local keys
+    keys="$(_ansible_tools__ansible_doc_json_keys "$module")"
+    [[ -z "$keys" ]] && return 0
+
+    local matches out=() m
+    matches=$(compgen -W "$keys" -- "$current_piece")
+    while IFS= read -r m; do
+        [[ -n "$m" ]] && out+=("$token_prefix$m")
+    done <<< "$matches"
+    COMPREPLY=("${out[@]}")
+}
+
+# ------------------------------
+# ansible-lint completion
+# ------------------------------
+
+_ansible_lint_completion() {
+    local cur prev
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    local opts="
+-h --help
+-P --list-profiles
+-L --list-rules
+-T --list-tags
+-f --format
+--sarif-file
+-q
+--profile
+--project-dir
+-r --rules-dir
+-R
+-s --strict
+--fix
+--show-relpath
+-t --tags
+-v
+-x --skip-list
+--generate-ignore
+-w --warn-list
+--enable-list
+--nocolor
+--force-color
+--exclude
+-c --config-file
+-i --ignore-file
+--yamllint-file
+--offline
+--no-offline
+--version
+"
+
+    case "$prev" in
+        -f|--format)
+            COMPREPLY=( $(compgen -W "brief full md json codeclimate quiet pep8 sarif" -- "$cur") )
+            return 0
+            ;;
+        --profile)
+            COMPREPLY=( $(compgen -W "min basic moderate safety shared production" -- "$cur") )
+            return 0
+            ;;
+        --fix)
+            COMPREPLY=( $(compgen -W "all none" -- "$cur") )
+            return 0
+            ;;
+        -c|--config-file|-i|--ignore-file|--yamllint-file|--sarif-file)
+            _ansible_tools__filedir "$cur"
+            return 0
+            ;;
+        --project-dir|-r|--rules-dir|--exclude)
+            _ansible_tools__filedir "$cur"
+            return 0
+            ;;
+        -t|--tags|-x|--skip-list|-w|--warn-list|--enable-list)
+            return 0
+            ;;
+    esac
+
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
+        return 0
+    fi
+
+    _ansible_tools__filedir "$cur"
+}
+
+# ------------------------------
+# ansible ad hoc completion
+# ------------------------------
+
+_ansible_completion() {
+    local cur prev
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    local common_opts="
+-h --help
+--version
+-v
+-b --become
+--become-method
+--become-user
+-K --become-password-file
+-i --inventory
+--list-hosts
+-l --limit
+--flush-cache
+-P --poll
+-B --background
+-o --one-line
+-t --tree
+--private-key --key-file
+-u --user
+-c --connection
+-T --timeout
+--ssh-common-args
+--sftp-extra-args
+--scp-extra-args
+--ssh-extra-args
+-k --ask-pass
+--connection-password-file
+-C --check
+-D --diff
+-e --extra-vars
+--vault-id
+-J --vault-password-file
+-f --forks
+-M --module-path
+--playbook-dir
+--task-timeout
+-a --args
+-m --module-name
+"
+
+    case "$prev" in
+        --become-method)
+            if _ansible_tools__have ansible-doc; then
+                COMPREPLY=( $(compgen -W "$(ansible-doc -t become -l 2>/dev/null | awk '{print $1}')" -- "$cur") )
+            fi
+            return 0
+            ;;
+        -i|--inventory|--private-key|--key-file|--connection-password-file|--vault-password-file|-M|--module-path|--playbook-dir|-t|--tree)
+            _ansible_tools__filedir "$cur"
+            return 0
+            ;;
+        -m|--module-name)
+            COMPREPLY=( $(compgen -W "$( _ansible_tools__ansible_modules )" -- "$cur") )
+            return 0
+            ;;
+        -c|--connection)
+            COMPREPLY=( $(compgen -W "ssh local paramiko smart docker podman buildah kubectl community.docker.docker nsenter chroot jail" -- "$cur") )
+            return 0
+            ;;
+        -a|--args)
+            local module
+            module="$(_ansible_tools__module_name)"
+            _ansible_tools__complete_ansible_argstring "$cur" "$module"
+            return 0
+            ;;
+        -l|--limit)
+            _ansible_tools__complete_inventory_pattern "$cur"
+            return 0
+            ;;
+    esac
+
+    # Support --module-name=<value>
+    if [[ "$cur" == --module-name=* ]]; then
+        local stub="${cur%%=*}="
+        local val="${cur#*=}"
+        local matches
+        matches=$(compgen -W "$( _ansible_tools__ansible_modules )" -- "$val")
+        COMPREPLY=( $(while IFS= read -r m; do [[ -n "$m" ]] && printf '%s\n' "$stub$m"; done <<< "$matches") )
+        return 0
+    fi
+
+    # Support --args=<value>
+    if [[ "$cur" == --args=* ]]; then
+        local stub="${cur%%=*}="
+        local val="${cur#*=}"
+        local module
+        module="$(_ansible_tools__module_name)"
+        _ansible_tools__complete_ansible_argstring "$val" "$module"
+        local out=() x
+        for x in "${COMPREPLY[@]}"; do
+            out+=("$stub$x")
+        done
+        COMPREPLY=("${out[@]}")
+        return 0
+    fi
+
+    # Support --limit=<value>
+    if [[ "$cur" == --limit=* ]]; then
+        local stub="${cur%%=*}="
+        local val="${cur#*=}"
+        _ansible_tools__complete_inventory_pattern "$val"
+        local out=() x
+        for x in "${COMPREPLY[@]}"; do
+            out+=("$stub$x")
+        done
+        COMPREPLY=("${out[@]}")
+        return 0
+    fi
+
+    if [[ "$cur" == -* ]]; then
+        COMPREPLY=( $(compgen -W "$common_opts" -- "$cur") )
+        return 0
+    fi
+
+    # First positional argument is the host pattern.
+    if (( COMP_CWORD == 1 )); then
+        _ansible_tools__complete_inventory_pattern "$cur"
+        return 0
+    fi
+}
+
+complete -F _ansible_lint_completion ansible-lint
+complete -F _ansible_completion ansible
