@@ -1,0 +1,43 @@
+- name: Build job template lookup
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    controller_host: "https://controller.example.com"
+    controller_username: "admin"
+    controller_password: "secret"
+    controller_verify_ssl: false
+
+  tasks:
+    - name: Query job templates from controller
+      set_fact:
+        jt_results: >-
+          {{
+            query(
+              'awx.awx.controller_api',
+              'job_templates',
+              host=controller_host,
+              username=controller_username,
+              password=controller_password,
+              verify_ssl=controller_verify_ssl
+            )
+          }}
+
+    - name: Build org -> job_template_name -> id map
+      set_fact:
+        job_template_map: >-
+          {{
+            job_template_map | default({}) |
+            combine(
+              {
+                item.summary_fields.organization.name: {
+                  item.name: item.id
+                }
+              },
+              recursive=True
+            )
+          }}
+      loop: "{{ jt_results }}"
+
+    - debug:
+        var: job_template_map
