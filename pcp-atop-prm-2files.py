@@ -8,85 +8,69 @@
 
 import sys
 import re
+import os
 
 
 def clean_process_name(name):
-    """Remove parentheses from the process name."""
-    return re.sub(r"[()]", "", name)
+    """Remove parentheses from process name."""
+    return re.sub(r"[()]", "", name).strip()
 
 
-def open_input(path):
-    if path == "-":
-        return sys.stdin
-    return open(path, "r", encoding="utf-8")
+def safe_filename(name):
+    """Make a string safe for use as a filename."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name)
 
 
-def load_existing_lines(output_file):
-    """
-    Load existing lines from the output file into a dict keyed by cleaned field 8.
-    Only works when output_file is a real file, not stdout.
-    """
-    lines_dict = {}
-    ordered_keys = []
+def process_stream(stream, output_dir, add_extension=False):
+    os.makedirs(output_dir, exist_ok=True)
 
-    if output_file == "-":
-        return lines_dict, ordered_keys
+    for line in stream:
+        stripped = line.rstrip("\n")
+        fields = stripped.split()
 
-    try:
-        with open(output_file, "r", encoding="utf-8") as f:
-            for line in f:
-                stripped = line.rstrip("\n")
-                fields = stripped.split()
-                if len(fields) < 8:
-                    continue
+        # Need at least 8 fields
+        if len(fields) < 8:
+            continue
 
-                proc_name = clean_process_name(fields[7])
-                if proc_name not in lines_dict:
-                    ordered_keys.append(proc_name)
-                lines_dict[proc_name] = stripped
-    except FileNotFoundError:
-        pass
+        # Field 6 = index 5, field 8 = index 7
+        field6 = fields[5].strip()
+        proc_name = clean_process_name(fields[7])
 
-    return lines_dict, ordered_keys
+        # Skip blank process names like ()
+        if not proc_name:
+            continue
 
+        # Update field 8 in output line
+        fields[7] = proc_name
+        output_line = " ".join(fields)
 
-def process_input(input_path, output_path):
-    lines_dict, ordered_keys = load_existing_lines(output_path)
+        filename = f"{safe_filename(field6)}_{safe_filename(proc_name)}"
+        if add_extension:
+            filename += ".log"
 
-    with open_input(input_path) as f:
-        for line in f:
-            stripped = line.rstrip("\n")
-            fields = stripped.split()
+        target_path = os.path.join(output_dir, filename)
 
-            if len(fields) < 8:
-                continue
-
-            proc_name = clean_process_name(fields[7])
-            fields[7] = proc_name
-            new_line = " ".join(fields)
-
-            if output_path == "-":
-                print(new_line)
-            else:
-                if proc_name not in lines_dict:
-                    ordered_keys.append(proc_name)
-                lines_dict[proc_name] = new_line
-
-    if output_path != "-":
-        with open(output_path, "w", encoding="utf-8") as f:
-            for key in ordered_keys:
-                f.write(lines_dict[key] + "\n")
+        with open(target_path, "a", encoding="utf-8") as outfile:
+            outfile.write(output_line + "\n")
 
 
 def main():
-    if len(sys.argv) != 3:
-        print(f"Usage: {sys.argv[0]} <input_file|- > <output_file|->", file=sys.stderr)
+    if len(sys.argv) not in (3, 4):
+        print(
+            f"Usage: {sys.argv[0]} <input_file|-> <output_dir> [--log-extension]",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     input_path = sys.argv[1]
-    output_path = sys.argv[2]
+    output_dir = sys.argv[2]
+    add_extension = len(sys.argv) == 4 and sys.argv[3] == "--log-extension"
 
-    process_input(input_path, output_path)
+    if input_path == "-":
+        process_stream(sys.stdin, output_dir, add_extension)
+    else:
+        with open(input_path, "r", encoding="utf-8") as infile:
+            process_stream(infile, output_dir, add_extension)
 
 
 if __name__ == "__main__":
