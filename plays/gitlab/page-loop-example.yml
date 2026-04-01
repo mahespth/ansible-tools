@@ -23,9 +23,11 @@
       else 2
       )
 
-
-- name: merge items
+- name: Combine
   set_fact:
-   data: "{{ data | default([]) + item.json }}"
-  loop: "{{ _return.results }}"
-  when: not item is skipped
+    data: >-
+     {{ _return.results
+         | rejectattr('skipped','defined')
+         | map(attribute='json')
+         | flatten
+     }}
