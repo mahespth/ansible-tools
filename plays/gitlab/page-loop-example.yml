@@ -1,0 +1,31 @@
+---
+
+# page loop example, I see some crazy things out there, not sure why people
+# make this so complicated. Gitlab wont return more than 100 items per page
+# just loop around until x_total_pages is exhausted and then merge the data.
+# Steve Maher.
+
+
+- name: loop
+  ansible.builtin.uri:
+    url: "{{ uri }}/?page={{ item }}&per_page={{ per_page | default(100) }}"
+    headers: { "PRIVATE-TOKEN": "{{ token }}" }
+    return_content: true
+    status_code:
+      - 404
+      - 200
+  register: _return
+  loop: "{{ range(1, 10) }}"
+  when: >
+    item <= (
+      _return.results[-1]["x_total_pages"] | default(0) | int if  _return.results is defined
+      else _return["x_total_pages"] | default(0) | int if _return is defined
+      else 2
+      )
+
+
+- name: merge items
+  set_fact:
+   data: "{{ data | default([]) + item.json }}"
+  loop: "{{ _return.results }}"
+  when: not item is skipped
