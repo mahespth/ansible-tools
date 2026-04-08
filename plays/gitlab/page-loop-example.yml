@@ -6,16 +6,20 @@
 # Steve Maher.
 
 
+- name: empty the return vars
+  ansible.builtin.set_fact:
+    _return: []
+    
 - name: loop
   ansible.builtin.uri:
-    url: "{{ uri }}/?page={{ item }}&per_page={{ per_page | default(100) }}"
+    url: "{{ uri }}?page={{ item }}&per_page={{ per_page | default(100) }}{{ '&'~page_options if page_options is defined }}"
     headers: { "PRIVATE-TOKEN": "{{ token }}" }
     return_content: true
     status_code:
       - 404
       - 200
   register: _return
-  loop: "{{ range(1, 10) }}"
+  loop: "{{ range(1, max_pages | default(10)) | list }}"
   when: >
     item <= (
       _return.results[-1]["x_total_pages"] | default(0) | int if  _return.results is defined
@@ -23,11 +27,12 @@
       else 2
       )
 
-- name: Combine
-  set_fact:
-    data: >-
-     {{ _return.results
-         | rejectattr('skipped','defined')
-         | map(attribute='json')
-         | flatten
-     }}
+- name: Combine data from all pages.
+  ansible.builtin.set_fact:
+    "{{ return_var | default('data') }}": >-
+      {{ _return.results
+          | rejectattr('skipped','defined')
+          | map(attribute='json')
+          | flatten
+      }}
+      
