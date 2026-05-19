@@ -6,7 +6,7 @@ try:
 except ImportError:
     from sos.report.plugins import Plugin, RedHatPlugin
 
-SOSREPORT_CONTROLLER_COMMANDS = [
+SOSREPORT_GATEWAY_COMMANDS = [
     "aap-gateway-manage --version",  # gateway version
     "aap-gateway-manage list_services",  # gateway cluster configuration
     "tree -d /etc/ansible-automation-platform",  # show me the dirs
@@ -14,7 +14,7 @@ SOSREPORT_CONTROLLER_COMMANDS = [
 ]
 
 
-SOSREPORT_CONTROLLER_DIRS = [
+SOSREPORT_GATEWAY_DIRS = [
     "/var/log/ansible-automation-platform/gateway/",
     "/etc/ansible-automation-platform/gateway/",
     "/etc/supervisord.conf",
@@ -37,17 +37,17 @@ SOSREPORT_FORBIDDEN_PATHS = [
 class Controller(Plugin, RedHatPlugin):
     '''Collect Ansible Automation Platform gateway information'''
 
-    plugin_name = "controller"
+    plugin_name = "gateway"
     short_desc = "Ansible Automation Platform gateway information"
 
     def setup(self):
-        for path in SOSREPORT_CONTROLLER_DIRS:
+        for path in SOSREPORT_GATEWAY_DIRS:
             self.add_copy_spec(path)
 
         for path in SOSREPORT_FORBIDDEN_PATHS:
             self.add_forbidden_path(path)
 
-        self.add_cmd_output(SOSREPORT_CONTROLLER_COMMANDS)
+        self.add_cmd_output(SOSREPORT_GATEWAY_COMMANDS)
 
     def postproc(self):
 
