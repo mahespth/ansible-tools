@@ -1,0 +1,31 @@
+---
+object_groups:
+{% set ns = namespace(in_object_group=false, current_type='', current_name='') %}
+{% for raw_line in ansible_net_config.splitlines() %}
+{% set line = raw_line.rstrip() %}
+{% set trimmed = line | trim %}
+
+{% if trimmed is match('^object-group\\s+') %}
+{% set parts = trimmed.split() %}
+{% set og_type = parts[1] %}
+{% set og_name = parts[2:] | join(' ') %}
+  {{ og_name | to_json }}:
+    type: {{ og_type | to_json }}
+    lines:
+{% set ns.in_object_group = true %}
+{% set ns.current_type = og_type %}
+{% set ns.current_name = og_name %}
+
+{% elif ns.in_object_group and raw_line.startswith(' ') and trimmed != '' %}
+{% if not trimmed.startswith('description ') %}
+      - {{ trimmed | to_json }}
+{% endif %}
+
+{% elif ns.in_object_group and not raw_line.startswith(' ') %}
+{% set ns.in_object_group = false %}
+{% set ns.current_type = '' %}
+{% set ns.current_name = '' %}
+{% endif %}
+
+{% endfor %}
+...
