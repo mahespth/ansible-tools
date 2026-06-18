@@ -1,0 +1,26 @@
+---
+
+- name: Export IOS extended ACLs to ios_acls YAML
+  hosts: switches
+  gather_facts: false
+
+  tasks:
+    - name: Get ACL config from running config
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | section ^ip access-list
+      register: acl_cli
+
+    - name: Parse ACL config into ios_acls structured data
+      cisco.ios.ios_acls:
+        running_config: "{{ acl_cli.stdout[0] }}"
+        state: parsed
+      register: parsed_acls
+
+    - name: Save parsed ACLs as host-specific YAML
+      ansible.builtin.copy:
+        dest: "./acl_vars/{{ inventory_hostname }}_acls.yml"
+        content: |
+          ios_acls_config:
+          {{ parsed_acls.parsed | to_nice_yaml(indent=2) | indent(2, true) }}
+      delegate_to: localhost
