@@ -22,5 +22,5 @@
         dest: "./acl_vars/{{ inventory_hostname }}_acls.yml"
         content: |
           ios_acls_config:
-          {{ parsed_acls.parsed | to_nice_yaml(indent=2) | indent(2, true) }}
+          {{ parsed_acls.parsed | to_nice_yaml(indent=2,sort_keys=false) | indent(2, true) }}
       delegate_to: localhost
