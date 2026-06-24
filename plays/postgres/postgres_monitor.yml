@@ -1,0 +1,140 @@
+---
+
+# Author: Steve  Maher
+# Monitor postgres DB usage
+
+- name: Snapshot PostgreSQL table sizes across all AAP databases
+  hosts: aap_database
+  gather_facts: false
+
+  vars:
+    pg_host: localhost
+    pg_port: 5432
+    pg_admin_db: postgres
+    pg_user: postgres
+    pg_password: "{{ vault_pg_password | default(omit) }}"
+
+    # Where to write the CSV on the control node
+    output_dir: "./aap_db_size_snapshots"
+    snapshot_ts: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+    snapshot_date: "{{ lookup('pipe', 'date -u +%Y-%m-%d') }}"
+    output_file: "{{ output_dir }}/aap_table_sizes_{{ inventory_hostname }}_{{ snapshot_date }}.csv"
+
+    excluded_databases:
+      - template0
+      - template1
+
+  collections:
+    - community.postgresql
+
+  pre_tasks:
+    - name: Ensure output directory exists on control node
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+      run_once: false
+
+  tasks:
+    - name: Get list of non-template databases
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        port: "{{ pg_port }}"
+        db: "{{ pg_admin_db }}"
+        login_user: "{{ pg_user }}"
+        login_password: "{{ pg_password | default(omit) }}"
+        query: |
+          SELECT datname
+          FROM pg_database
+          WHERE datallowconn = true
+            AND datistemplate = false
+            AND datname NOT IN ({{ excluded_databases | map('quote') | join(', ') }})
+          ORDER BY datname;
+      register: pg_databases
+
+    - name: Query table sizes and stats from each database
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        port: "{{ pg_port }}"
+        db: "{{ item.datname }}"
+        login_user: "{{ pg_user }}"
+        login_password: "{{ pg_password | default(omit) }}"
+        query: |
+          SELECT
+            current_database() AS database_name,
+            n.nspname AS schema_name,
+            c.relname AS table_name,
+
+            pg_relation_size(c.oid) AS table_bytes,
+            pg_indexes_size(c.oid) AS index_bytes,
+            pg_total_relation_size(c.oid) AS total_bytes,
+            pg_total_relation_size(c.oid)
+              - pg_relation_size(c.oid)
+              - pg_indexes_size(c.oid) AS toast_bytes,
+
+            COALESCE(s.n_live_tup, 0) AS estimated_live_rows,
+            COALESCE(s.n_dead_tup, 0) AS estimated_dead_rows,
+            COALESCE(s.n_tup_ins, 0) AS tuples_inserted,
+            COALESCE(s.n_tup_upd, 0) AS tuples_updated,
+            COALESCE(s.n_tup_del, 0) AS tuples_deleted,
+            s.last_vacuum,
+            s.last_autovacuum,
+            s.last_analyze,
+            s.last_autoanalyze
+
+          FROM pg_class c
+          JOIN pg_namespace n
+            ON n.oid = c.relnamespace
+          LEFT JOIN pg_stat_user_tables s
+            ON s.relid = c.oid
+          WHERE c.relkind IN ('r', 'p')
+            AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY pg_total_relation_size(c.oid) DESC;
+      loop: "{{ pg_databases.query_result }}"
+      loop_control:
+        label: "{{ item.datname }}"
+      register: per_database_table_sizes
+
+    - name: Build CSV rows
+      ansible.builtin.set_fact:
+        csv_rows: >-
+          {{
+            csv_rows | default([]) +
+            [
+              [
+                snapshot_ts,
+                inventory_hostname,
+                item.0.item.datname,
+                item.1.schema_name,
+                item.1.table_name,
+                item.1.table_bytes,
+                item.1.index_bytes,
+                item.1.toast_bytes,
+                item.1.total_bytes,
+                item.1.estimated_live_rows,
+                item.1.estimated_dead_rows,
+                item.1.tuples_inserted,
+                item.1.tuples_updated,
+                item.1.tuples_deleted,
+                item.1.last_vacuum | default(''),
+                item.1.last_autovacuum | default(''),
+                item.1.last_analyze | default(''),
+                item.1.last_autoanalyze | default('')
+              ]
+            ]
+          }}
+      loop: "{{ per_database_table_sizes.results | subelements('query_result') }}"
+      loop_control:
+        label: "{{ item.0.item.datname }}.{{ item.1.schema_name }}.{{ item.1.table_name }}"
+
+    - name: Write CSV snapshot
+      ansible.builtin.copy:
+        dest: "{{ output_file }}"
+        mode: "0640"
+        content: |
+          snapshot_ts,host,database_name,schema_name,table_name,table_bytes,index_bytes,toast_bytes,total_bytes,estimated_live_rows,estimated_dead_rows,tuples_inserted,tuples_updated,tuples_deleted,last_vacuum,last_autovacuum,last_analyze,last_autoanalyze
+          {% for row in csv_rows | default([]) %}
+          {{ row | map('string') | map('regex_replace', '"', '""') | map('regex_replace', '^(.*)$', '"\1"') | join(',') }}
+          {% endfor %}
+      delegate_to: localhost
