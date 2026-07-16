@@ -1,0 +1,386 @@
+{#
+  Input:
+    vcenter_vms: _vcenter_vm_info.virtual_machines
+
+  Optional:
+    quorum_groups:
+      - kfk1
+      - etcd
+
+    esx_name_map:
+      esx01.example.com: esx01
+      esx02.example.com: esx02
+#}
+
+{% set excluded_groups = ['all', 'ungrouped', 'esxp'] %}
+
+{% set selected_groups =
+  groups.keys()
+  | select('match', '^.{1,4}$')
+  | reject('in', excluded_groups)
+  | sort
+  | list
+%}
+
+{% set esx_hosts = groups.get('esxp', []) | sort %}
+{% set quorum_group_list = quorum_groups | default([]) %}
+
+{% set report = namespace(
+  distributions=[],
+  placement_mismatch=[],
+  avoidable_colocation=[],
+  unavoidable_colocation=[],
+  quorum_risk=[],
+  missing_from_vcenter=[],
+  unknown_esx=[]
+) %}
+
+{#
+  Build a lookup of vCenter VM name to returned VM information.
+#}
+{% set vc = namespace(by_name={}) %}
+
+{% for vm in vcenter_vms | default([]) %}
+{% if vm.guest_name is defined %}
+{% set _ = vc.by_name.update({
+  (vm.guest_name | lower): vm
+}) %}
+{% endif %}
+{% endfor %}
+
+{#
+  Build a lookup allowing either the full ESX FQDN or short hostname
+  to match an inventory hostname from groups['esxp'].
+#}
+{% set esx_lookup = namespace(by_name={}) %}
+
+{% for esx in esx_hosts %}
+{% set _ = esx_lookup.by_name.update({
+  (esx | lower): esx,
+  (esx.split('.')[0] | lower): esx
+}) %}
+{% endfor %}
+
+{% for group_name in selected_groups %}
+
+{% set group_state = namespace(
+  expected_members=[],
+  found_members=[],
+  current_esx={},
+  counts={},
+  vms_by_esx={}
+) %}
+
+{% for esx in esx_hosts %}
+{% set _ = group_state.counts.update({
+  esx: 0
+}) %}
+{% set _ = group_state.vms_by_esx.update({
+  esx: []
+}) %}
+{% endfor %}
+
+{#
+  Find VMware VMs belonging to this inventory group.
+#}
+{% for inventory_vm in groups[group_name] | sort %}
+
+{% if
+  hostvars[inventory_vm].virtualization_type
+  | default('')
+  | lower
+  == 'vmware'
+%}
+
+{% set _ = group_state.expected_members.append(inventory_vm) %}
+
+{#
+  Permit an inventory host to define a different vCenter VM name:
+
+    vmware_guest_name: actual-vcenter-name
+#}
+{% set vcenter_name =
+  hostvars[inventory_vm].vmware_guest_name
+  | default(inventory_vm)
+%}
+
+{% set vcenter_key = vcenter_name | lower %}
+
+{% if vcenter_key not in vc.by_name %}
+
+{% set _ = report.missing_from_vcenter.append({
+  'group': group_name,
+  'inventory_host': inventory_vm,
+  'vcenter_name': vcenter_name
+}) %}
+
+{% else %}
+
+{% set vc_vm = vc.by_name[vcenter_key] %}
+{% set raw_esx = vc_vm.esxi_hostname | default('') %}
+{% set raw_esx_key = raw_esx | lower %}
+{% set short_esx_key = raw_esx.split('.')[0] | lower %}
+
+{% set resolved = namespace(esx='') %}
+
+{#
+  An explicit map takes priority where vCenter and inventory ESX names
+  cannot otherwise be matched.
+#}
+{% if
+  esx_name_map is defined
+  and raw_esx in esx_name_map
+%}
+{% set resolved.esx = esx_name_map[raw_esx] %}
+
+{% elif raw_esx_key in esx_lookup.by_name %}
+{% set resolved.esx = esx_lookup.by_name[raw_esx_key] %}
+
+{% elif short_esx_key in esx_lookup.by_name %}
+{% set resolved.esx = esx_lookup.by_name[short_esx_key] %}
+{% endif %}
+
+{% if resolved.esx == '' %}
+
+{% set _ = report.unknown_esx.append({
+  'group': group_name,
+  'vm': inventory_vm,
+  'vcenter_name': vcenter_name,
+  'reported_esx': raw_esx
+}) %}
+
+{% else %}
+
+{% set _ = group_state.found_members.append(inventory_vm) %}
+
+{% set _ = group_state.current_esx.update({
+  inventory_vm: resolved.esx
+}) %}
+
+{% set _ = group_state.counts.update({
+  resolved.esx:
+    group_state.counts[resolved.esx] + 1
+}) %}
+
+{% set _ = group_state.vms_by_esx[resolved.esx].append(
+  inventory_vm
+) %}
+
+{% endif %}
+{% endif %}
+{% endif %}
+
+{% endfor %}
+
+{% set expected_count = group_state.expected_members | length %}
+{% set found_count = group_state.found_members | length %}
+{% set evaluation_complete = expected_count == found_count %}
+
+{% if esx_hosts | length > 0 and found_count > 0 %}
+
+{% set minimum_count =
+  group_state.counts.values()
+  | list
+  | min
+%}
+
+{% set maximum_count =
+  group_state.counts.values()
+  | list
+  | max
+%}
+
+{% set placement = namespace(
+  duplicate_hosts=[],
+  overloaded_hosts=[],
+  least_loaded_hosts=[]
+) %}
+
+{% for esx in esx_hosts %}
+
+{% set vm_count = group_state.counts[esx] %}
+
+{% if vm_count > 1 %}
+{% set _ = placement.duplicate_hosts.append({
+  'esx': esx,
+  'count': vm_count,
+  'vms': group_state.vms_by_esx[esx]
+}) %}
+{% endif %}
+
+{#
+  A source ESX is overloaded when it contains at least two more
+  group members than the least-loaded eligible ESX.
+#}
+{% if vm_count > minimum_count + 1 %}
+{% set _ = placement.overloaded_hosts.append({
+  'esx': esx,
+  'count': vm_count,
+  'vms': group_state.vms_by_esx[esx]
+}) %}
+{% endif %}
+
+{% if vm_count == minimum_count %}
+{% set _ = placement.least_loaded_hosts.append({
+  'esx': esx,
+  'count': vm_count
+}) %}
+{% endif %}
+
+{% endfor %}
+
+{% set distribution = {
+  'group': group_name,
+  'expected_members': expected_count,
+  'found_members': found_count,
+  'evaluation_complete': evaluation_complete,
+  'minimum_per_esx': minimum_count,
+  'maximum_per_esx': maximum_count,
+  'counts': group_state.counts
+} %}
+
+{% set _ = report.distributions.append(distribution) %}
+
+{#
+  Difference greater than one means the distribution can be improved
+  by moving VMs from an overloaded ESX to a least-loaded ESX.
+#}
+{% if
+  placement.duplicate_hosts | length > 0
+  and maximum_count - minimum_count > 1
+%}
+
+{% set _ = report.avoidable_colocation.append({
+  'group': group_name,
+  'member_count': found_count,
+  'esx_count': esx_hosts | length,
+  'some_colocation_is_unavoidable':
+    found_count > esx_hosts | length,
+  'duplicate_hosts': placement.duplicate_hosts,
+  'source_hosts': placement.overloaded_hosts,
+  'possible_destination_hosts':
+    placement.least_loaded_hosts,
+  'counts': group_state.counts
+}) %}
+
+{% elif placement.duplicate_hosts | length > 0 %}
+
+{% set _ = report.unavoidable_colocation.append({
+  'group': group_name,
+  'member_count': found_count,
+  'esx_count': esx_hosts | length,
+  'duplicate_hosts': placement.duplicate_hosts,
+  'counts': group_state.counts
+}) %}
+
+{% endif %}
+
+{#
+  Verify predictable round-robin placement for groups larger than two:
+
+    vm01 -> esx01
+    vm02 -> esx02
+    ...
+    vm09 -> esx01, with eight ESX hosts
+#}
+{% if expected_count > 2 and evaluation_complete %}
+
+{% for inventory_vm in group_state.expected_members | sort %}
+
+{% set expected_esx =
+  esx_hosts[
+    loop.index0 % (esx_hosts | length)
+  ]
+%}
+
+{% set actual_esx =
+  group_state.current_esx.get(inventory_vm, '')
+%}
+
+{% if actual_esx != expected_esx %}
+
+{% set _ = report.placement_mismatch.append({
+  'group': group_name,
+  'vm': inventory_vm,
+  'expected_esx': expected_esx,
+  'actual_esx': actual_esx
+}) %}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{#
+  Generic majority quorum calculation.
+
+  quorum_required = floor(member_count / 2) + 1
+
+  Only report ESX co-location risks. A normally distributed group
+  where each ESX contains one member is not reported here.
+#}
+{% if
+  group_name in quorum_group_list
+  and evaluation_complete
+%}
+
+{% set quorum_required =
+  (expected_count // 2) + 1
+%}
+
+{% for esx in esx_hosts %}
+
+{% set members_on_esx =
+  group_state.counts[esx]
+%}
+
+{% set remaining_after_loss =
+  expected_count - members_on_esx
+%}
+
+{% if
+  members_on_esx > 1
+  and remaining_after_loss < quorum_required
+%}
+
+{% set _ = report.quorum_risk.append({
+  'group': group_name,
+  'esx': esx,
+  'total_members': expected_count,
+  'members_on_esx': members_on_esx,
+  'vms_on_esx': group_state.vms_by_esx[esx],
+  'quorum_required': quorum_required,
+  'remaining_after_esx_loss': remaining_after_loss
+}) %}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% endif %}
+{% endfor %}
+
+{{ {
+  'summary': {
+    'groups_checked': selected_groups | length,
+    'esx_hosts_checked': esx_hosts | length,
+    'placement_mismatches':
+      report.placement_mismatch | length,
+    'avoidable_colocation_issues':
+      report.avoidable_colocation | length,
+    'unavoidable_colocation_groups':
+      report.unavoidable_colocation | length,
+    'quorum_risks':
+      report.quorum_risk | length,
+    'missing_vms':
+      report.missing_from_vcenter | length,
+    'unknown_esx_hosts':
+      report.unknown_esx | length
+  },
+  'group_distributions': report.distributions,
+  'placement_mismatch': report.placement_mismatch,
+  'avoidable_colocation': report.avoidable_colocation,
+  'unavoidable_colocation': report.unavoidable_colocation,
+  'quorum_risk': report.quorum_risk,
+  'missing_from_vcenter': report.missing_from_vcenter,
+  'unknown_esx': report.unknown_esx
+} | to_nice_yaml(indent=2) }}
