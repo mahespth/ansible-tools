@@ -1,0 +1,78 @@
+---
+- name: Build VMware placement report metadata
+  ansible.builtin.set_fact:
+    vmware_report_critical_count: >-
+      {{
+        (vmware_placement_check.quorum_risk | default([]) | length)
+        +
+        (vmware_placement_check.avoidable_colocation | default([]) | length)
+      }}
+    vmware_report_warning_count: >-
+      {{
+        (vmware_placement_check.unavoidable_colocation | default([]) | length)
+        +
+        (vmware_placement_check.placement_mismatch | default([]) | length)
+        +
+        (vmware_placement_check.missing_from_vcenter | default([]) | length)
+        +
+        (vmware_placement_check.unknown_esx | default([]) | length)
+      }}
+  run_once: true
+
+- name: Set VMware placement report status
+  ansible.builtin.set_fact:
+    vmware_report_status: >-
+      {{
+        'CRITICAL'
+        if vmware_report_critical_count | int > 0
+        else (
+          'WARNING'
+          if vmware_report_warning_count | int > 0
+          else 'HEALTHY'
+        )
+      }}
+  run_once: true
+
+- name: Email VMware placement report
+  community.general.mail:
+    host: "{{ smtp_host }}"
+    port: "{{ smtp_port | default(25) }}"
+    secure: "{{ smtp_secure | default('try') }}"
+    username: "{{ smtp_username | default(omit) }}"
+    password: "{{ smtp_password | default(omit) }}"
+    sender: "{{ report_sender }}"
+    to: "{{ report_recipients }}"
+    cc: "{{ report_cc | default(omit) }}"
+    subject: >-
+      [{{ vmware_report_status }}]
+      VMware ESX Placement Report -
+      {{ inventory_name | default('AAP inventory') }}
+    subtype: html
+    charset: utf-8
+    body: >-
+      {{
+        lookup(
+          'ansible.builtin.template',
+          'vmware_placement_report.html.j2'
+        )
+      }}
+  vars:
+    report_generated_at: "{{ now(utc=true, fmt='%Y-%m-%d %H:%M:%S UTC') }}"
+    launched_by_name: >-
+      {{
+        tower_user_name
+        | default(awx_user_name)
+        | default(ansible_user_id)
+        | default('Ansible Automation Platform')
+      }}
+    aap_job_url: >-
+      {{
+        (aap_url | default(''))
+        ~
+        ('/#/jobs/playbook/' ~ tower_job_id ~ '/output')
+        if tower_job_id is defined
+        else ''
+      }}
+  delegate_to: localhost
+  run_once: true
+  no_log: "{{ smtp_password is defined }}"
