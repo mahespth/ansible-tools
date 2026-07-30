@@ -1,0 +1,73 @@
+---
+- name: Validate iDRAC DNS and email attributes
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # This can instead be passed using --extra-vars or vars_files.
+    idrac_hosts:
+      - host: "192.168.10.21"
+        expected_dns_name: "server01-idrac"
+        expected_dns_domain: "example.com"
+        expected_email: "infrastructure@example.com"
+
+      - host: "192.168.10.22"
+        expected_dns_name: "server02-idrac"
+        expected_dns_domain: "example.com"
+        expected_email: "infrastructure@example.com"
+
+    # Prefer Ansible Vault or environment variables for credentials.
+    idrac_username: "{{ lookup('env', 'IDRAC_USERNAME') }}"
+    idrac_password: "{{ lookup('env', 'IDRAC_PASSWORD') }}"
+
+    idrac_attributes_uri: >-
+      /redfish/v1/Managers/iDRAC.Embedded.1/Attributes
+
+  tasks:
+    - name: Read attributes from each iDRAC
+      ansible.builtin.uri:
+        url: "https://{{ item.host }}{{ idrac_attributes_uri }}"
+        method: GET
+        url_username: "{{ idrac_username }}"
+        url_password: "{{ idrac_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+        status_code: 200
+        headers:
+          Accept: application/json
+      loop: "{{ idrac_hosts }}"
+      loop_control:
+        label: "{{ item.host }}"
+      register: idrac_attribute_responses
+      no_log: true
+
+    - name: Check DNS and email attributes
+      ansible.builtin.assert:
+        that:
+          - item.status == 200
+          - attributes['NIC.1.DNSRacName'] | default('MISSING') == item.item.expected_dns_name
+          - attributes['NIC.1.DNSDomainName'] | default('MISSING') == item.item.expected_dns_domain
+          - attributes['EmailAlert.1.Address'] | default('MISSING') == item.item.expected_email
+        success_msg: >-
+          {{ item.item.host }} passed:
+          DNS={{ attributes['NIC.1.DNSRacName'] }}.
+          {{ attributes['NIC.1.DNSDomainName'] }},
+          email={{ attributes['EmailAlert.1.Address'] }}
+        fail_msg: |
+          Attribute validation failed for {{ item.item.host }}.
+
+          Expected:
+            DNS name:   {{ item.item.expected_dns_name }}
+            DNS domain: {{ item.item.expected_dns_domain }}
+            Email:      {{ item.item.expected_email }}
+
+          Actual:
+            DNS name:   {{ attributes['NIC.1.DNSRacName'] | default('MISSING') }}
+            DNS domain: {{ attributes['NIC.1.DNSDomainName'] | default('MISSING') }}
+            Email:      {{ attributes['EmailAlert.1.Address'] | default('MISSING') }}
+      vars:
+        attributes: "{{ item.json.Attributes | default({}) }}"
+      loop: "{{ idrac_attribute_responses.results }}"
+      loop_control:
+        label: "{{ item.item.host }}"
