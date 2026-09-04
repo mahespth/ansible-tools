@@ -1,0 +1,161 @@
+- name: Collect installed packages for inventory package report
+  hosts: all
+  gather_facts: false
+  ignore_unreachable: true
+  vars:
+    enable_linux_report: true
+    enable_windows_report: false
+
+  tasks:
+    - name: Initialise package report host facts
+      ansible.builtin.set_fact:
+        package_report_reachable: false
+        package_report_packages: []
+      when:
+        - (os_type | default('') | lower == 'linux' and enable_linux_report | bool) or
+          (os_type | default('') | lower == 'windows' and enable_windows_report | bool)
+
+    - name: Test Linux connectivity
+      ansible.builtin.ping:
+      register: package_report_linux_ping
+      changed_when: false
+      failed_when: false
+      when:
+        - enable_linux_report | bool
+        - os_type | default('') | lower == 'linux'
+
+    - name: Mark reachable Linux hosts
+      ansible.builtin.set_fact:
+        package_report_reachable: true
+      when:
+        - enable_linux_report | bool
+        - os_type | default('') | lower == 'linux'
+        - package_report_linux_ping.ping | default('') == 'pong'
+
+    - name: Gather Linux package facts
+      ansible.builtin.package_facts:
+        manager: auto
+      when:
+        - enable_linux_report | bool
+        - os_type | default('') | lower == 'linux'
+        - package_report_reachable | default(false) | bool
+
+    - name: Normalise Linux package facts
+      ansible.builtin.set_fact:
+        package_report_packages: >-
+          {{
+            (package_report_packages | default([]))
+            + [
+                {
+                  'name': item.0.key | string,
+                  'version': item.1.version | default('unknown') | string
+                }
+              ]
+          }}
+      loop: "{{ (ansible_facts.packages | default({}) | dict2items) | subelements('value') }}"
+      loop_control:
+        label: "{{ item.0.key }} {{ item.1.version | default('unknown') }}"
+      when:
+        - enable_linux_report | bool
+        - os_type | default('') | lower == 'linux'
+        - package_report_reachable | default(false) | bool
+
+    - name: Test Windows connectivity
+      ansible.windows.win_ping:
+      register: package_report_windows_ping
+      changed_when: false
+      failed_when: false
+      when:
+        - enable_windows_report | bool
+        - os_type | default('') | lower == 'windows'
+
+    - name: Mark reachable Windows hosts
+      ansible.builtin.set_fact:
+        package_report_reachable: true
+      when:
+        - enable_windows_report | bool
+        - os_type | default('') | lower == 'windows'
+        - package_report_windows_ping.ping | default('') == 'pong'
+
+    - name: Gather Windows installed applications
+      ansible.windows.win_powershell:
+        script: |
+          $registryPaths = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          )
+
+          $packages = foreach ($path in $registryPaths) {
+            Get-ItemProperty -Path $path -ErrorAction SilentlyContinue |
+              Where-Object { $_.DisplayName } |
+              ForEach-Object {
+                [PSCustomObject]@{
+                  name    = [string]$_.DisplayName
+                  version = if ($_.DisplayVersion) { [string]$_.DisplayVersion } else { 'unknown' }
+                }
+              }
+          }
+
+          # A product can appear in more than one uninstall registry view.
+          $Ansible.Result = @(
+            $packages |
+              Sort-Object name, version -Unique
+          )
+      register: package_report_windows_packages
+      changed_when: false
+      when:
+        - enable_windows_report | bool
+        - os_type | default('') | lower == 'windows'
+        - package_report_reachable | default(false) | bool
+
+    - name: Normalise Windows package facts
+      ansible.builtin.set_fact:
+        package_report_packages: "{{ package_report_windows_packages.result | default([]) }}"
+      when:
+        - enable_windows_report | bool
+        - os_type | default('') | lower == 'windows'
+        - package_report_reachable | default(false) | bool
+
+
+- name: Render package inventory reports
+  hosts: localhost
+  gather_facts: false
+  vars:
+    enable_linux_report: true
+    enable_windows_report: false
+    package_report_output_dir: "{{ playbook_dir }}/reports"
+    package_report_template: templates/package_report.html.j2
+    package_report_inventory_name: "{{ inventory_name | default('Ansible inventory') }}"
+
+  tasks:
+    - name: Create report output directory
+      ansible.builtin.file:
+        path: "{{ package_report_output_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Set report generation timestamp
+      ansible.builtin.set_fact:
+        package_report_generated_at: "{{ now(utc=true, fmt='%Y-%m-%d %H:%M:%S UTC') }}"
+
+    - name: Render Linux package report
+      ansible.builtin.template:
+        src: "{{ package_report_template }}"
+        dest: "{{ package_report_output_dir }}/linux_package_report.html"
+        mode: '0644'
+      vars:
+        report_os_type: linux
+        report_title: Linux Package Inventory Report
+      when: enable_linux_report | bool
+
+    - name: Render Windows package report
+      ansible.builtin.template:
+        src: "{{ package_report_template }}"
+        dest: "{{ package_report_output_dir }}/windows_package_report.html"
+        mode: '0644'
+      vars:
+        report_os_type: windows
+        report_title: Windows Package Inventory Report
+      when: enable_windows_report | bool
+
+...
