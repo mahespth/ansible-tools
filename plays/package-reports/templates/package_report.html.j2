@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>{{ report_title }}</title>
+</head>
+
+<body style="margin:0; padding:0; background-color:#f3f3f3; font-family:Arial, Helvetica, sans-serif; color:#333333;">
+{% set ns = namespace(reachable=[], unreachable=[], package_keys=[], packages=[]) %}
+
+{# Build the host and package sets entirely from inventory hostvars. #}
+{% for host in groups['all'] | default([]) | sort %}
+  {% if hostvars[host].os_type | default('') | lower == report_os_type | lower %}
+    {% if hostvars[host].package_report_reachable | default(false) | bool %}
+      {% set ns.reachable = ns.reachable + [host] %}
+      {% for package in hostvars[host].package_report_packages | default([]) %}
+        {% set package_name = package.name | default('unknown') | string %}
+        {% set package_version = package.version | default('unknown') | string %}
+        {% set package_key = package_name ~ '\u001f' ~ package_version %}
+        {% if package_key not in ns.package_keys %}
+          {% set ns.package_keys = ns.package_keys + [package_key] %}
+          {% set ns.packages = ns.packages + [{'name': package_name, 'version': package_version}] %}
+        {% endif %}
+      {% endfor %}
+    {% else %}
+      {% set ns.unreachable = ns.unreachable + [host] %}
+    {% endif %}
+  {% endif %}
+{% endfor %}
+
+{% set package_rows = ns.packages | sort(attribute='version') | sort(attribute='name') %}
+{% set total_hosts = (ns.reachable | length) + (ns.unreachable | length) %}
+{% if ns.reachable | length == 0 %}
+  {% set overall_status = 'NO REACHABLE HOSTS' %}
+  {% set status_bg = '#f8d7da' %}
+  {% set status_colour = '#c00000' %}
+{% elif ns.unreachable | length > 0 %}
+  {% set overall_status = 'PARTIAL' %}
+  {% set status_bg = '#fff3cd' %}
+  {% set status_colour = '#856404' %}
+{% else %}
+  {% set overall_status = 'COMPLETE' %}
+  {% set status_bg = '#e7f3e7' %}
+  {% set status_colour = '#217346' %}
+{% endif %}
+
+<table width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="#f3f3f3">
+  <tr>
+    <td align="center" style="padding:20px;">
+
+      <table width="1200" border="0" cellspacing="0" cellpadding="0"
+             bgcolor="#ffffff"
+             style="width:1200px; max-width:1200px; border-collapse:collapse; background-color:#ffffff;">
+        <tr>
+          <td style="padding:24px;">
+            <h2 style="margin:0 0 8px 0; font-size:22px; color:#333333;">
+              {{ report_title }}
+            </h2>
+
+            <p style="margin:0 0 4px 0; font-size:14px; color:#555555;">
+              Inventory:
+              <strong>{{ package_report_inventory_name | default('Ansible inventory', true) }}</strong>
+            </p>
+            <p style="margin:0 0 20px 0; font-size:14px; color:#555555;">
+              Generated:
+              <strong>{{ package_report_generated_at | default('N/A', true) }}</strong>
+              &nbsp;&nbsp; OS type:
+              <strong>{{ report_os_type | upper }}</strong>
+            </p>
+
+            <!-- Overall status -->
+            <table width="100%" border="0" cellspacing="0" cellpadding="10"
+                   style="width:100%; border-collapse:collapse; margin-bottom:14px;">
+              <tr>
+                <td bgcolor="{{ status_bg }}"
+                    style="border:1px solid #cccccc; font-size:18px; color:{{ status_colour }};">
+                  <strong>{{ overall_status }}</strong>
+                  {% if ns.reachable | length == 0 %}
+                  &mdash; none of the {{ report_os_type }} inventory hosts returned package data.
+                  {% elif ns.unreachable | length > 0 %}
+                  &mdash; package data was collected from reachable hosts; {{ ns.unreachable | length }} host(s) could not be reached.
+                  {% else %}
+                  &mdash; package data was collected from every matching inventory host.
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+
+            <!-- Summary -->
+            <table width="100%" border="0" cellspacing="0" cellpadding="8"
+                   style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+              <tr>
+                <td width="25%" bgcolor="#e7f3e7"
+                    style="border:1px solid #cccccc; font-size:15px;">
+                  <strong>{{ ns.reachable | length }}</strong><br>
+                  reachable hosts
+                </td>
+                <td width="25%"
+                    bgcolor="{% if ns.unreachable | length > 0 %}#fff3cd{% else %}#e7f3e7{% endif %}"
+                    style="border:1px solid #cccccc; font-size:15px;">
+                  <strong>{{ ns.unreachable | length }}</strong><br>
+                  unreachable hosts
+                </td>
+                <td width="25%" bgcolor="#e7f3e7"
+                    style="border:1px solid #cccccc; font-size:15px;">
+                  <strong>{{ package_rows | length }}</strong><br>
+                  package/version rows
+                </td>
+                <td width="25%" bgcolor="#eeeeee"
+                    style="border:1px solid #cccccc; font-size:15px;">
+                  <strong>{{ total_hosts }}</strong><br>
+                  matching inventory hosts
+                </td>
+              </tr>
+            </table>
+
+            {% if ns.unreachable | length > 0 %}
+            <h3 style="margin:0 0 10px 0; font-size:18px; color:#856404;">
+              Unreachable Hosts
+            </h3>
+            <table width="100%" border="0" cellspacing="0" cellpadding="7"
+                   style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:25px;">
+              <tr bgcolor="#333333">
+                <th align="left" style="border:1px solid #cccccc; color:#ffffff;">Inventory Host</th>
+                <th align="left" style="border:1px solid #cccccc; color:#ffffff;">OS Type</th>
+                <th align="left" style="border:1px solid #cccccc; color:#ffffff;">Result</th>
+              </tr>
+              {% for host in ns.unreachable %}
+              <tr bgcolor="{% if loop.index is even %}#f7f7f7{% else %}#ffffff{% endif %}">
+                <td style="border:1px solid #cccccc;"><strong>{{ host }}</strong></td>
+                <td style="border:1px solid #cccccc;">{{ report_os_type | upper }}</td>
+                <td style="border:1px solid #cccccc; color:#856404;">No package data returned</td>
+              </tr>
+              {% endfor %}
+            </table>
+            {% endif %}
+
+            <h3 style="margin:0 0 10px 0; font-size:18px; color:#333333;">
+              Installed Package Matrix
+            </h3>
+
+            {% if ns.reachable | length > 0 and package_rows | length > 0 %}
+            <table width="100%" border="0" cellspacing="0" cellpadding="7"
+                   style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:25px;">
+              <tr bgcolor="#333333">
+                <th align="left" style="border:1px solid #cccccc; color:#ffffff; white-space:nowrap;">Package Name</th>
+                <th align="left" style="border:1px solid #cccccc; color:#ffffff; white-space:nowrap;">Version</th>
+                {% for host in ns.reachable %}
+                <th align="center" style="border:1px solid #cccccc; color:#ffffff; font-size:11px;">{{ host }}</th>
+                {% endfor %}
+              </tr>
+
+              {% for package in package_rows %}
+              <tr bgcolor="{% if loop.index is even %}#f7f7f7{% else %}#ffffff{% endif %}">
+                <td style="border:1px solid #cccccc;"><strong>{{ package.name }}</strong></td>
+                <td style="border:1px solid #cccccc; font-family:Consolas, 'Courier New', monospace; font-size:11px; white-space:nowrap;">
+                  {{ package.version }}
+                </td>
+                {% for host in ns.reachable %}
+                  {% set installed = hostvars[host].package_report_packages | default([])
+                                     | selectattr('name', 'equalto', package.name)
+                                     | selectattr('version', 'equalto', package.version)
+                                     | list %}
+                <td align="center"
+                    bgcolor="{% if installed | length > 0 %}#e7f3e7{% else %}{% if loop.index is even %}#f7f7f7{% else %}#ffffff{% endif %}{% endif %}"
+                    style="border:1px solid #cccccc; font-size:14px; color:{% if installed | length > 0 %}#217346{% else %}#bbbbbb{% endif %};">
+                  {% if installed | length > 0 %}&#10003;{% else %}&nbsp;{% endif %}
+                </td>
+                {% endfor %}
+              </tr>
+              {% endfor %}
+            </table>
+            {% elif ns.reachable | length > 0 %}
+            <p style="margin:0 0 25px 0; color:#555555;">
+              Reachable hosts were found, but no package records were returned.
+            </p>
+            {% else %}
+            <p style="margin:0 0 25px 0; color:#555555;">
+              No reachable {{ report_os_type }} hosts were available for the package matrix.
+            </p>
+            {% endif %}
+
+            <p style="margin:25px 0 0 0; padding-top:15px; border-top:1px solid #dddddd;
+                      font-size:12px; color:#777777;">
+              This report reflects package information returned by reachable inventory hosts at the time the automation ran.
+              Linux package data is collected with <strong>package_facts</strong>; Windows application data is read from the
+              standard 64-bit and 32-bit uninstall registry locations.
+            </p>
+
+          </td>
+        </tr>
+      </table>
+
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>
