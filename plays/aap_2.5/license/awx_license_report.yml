@@ -1,0 +1,113 @@
+---
+
+# Report licenses for customer to view in a friendly way
+# Steve Maher, AIXtreme Research Ltd.
+# -------------------------------------------------------
+  
+- name: Generate AWX host metric license report
+  hosts: awx_controller
+  gather_facts: false
+
+
+  vars:
+    awx_manage_command: awx-manage
+    awx_license_report_become: false
+    awx_license_report_become_user: root
+    awx_license_report_output_dir: "{{ playbook_dir }}/reports"
+    awx_license_report_template: template/awx_license_report.html.j2
+    awx_license_report_filename: awx_license_report.html
+    awx_license_report_title: AWX Host Metric License Report
+    awx_license_inventory_name: "{{ inventory_name | default('Ansible inventory') }}"
+
+  tasks:
+    - name: Create temporary directory for AWX host metric CSV
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: awx_host_metric_
+      register: awx_license_temp_dir
+      become: "{{ awx_license_report_become | bool }}"
+      become_user: "{{ awx_license_report_become_user }}"
+      run_once: true
+
+    - name: Set AWX host metric CSV path
+      ansible.builtin.set_fact:
+        awx_license_csv_path: "{{ awx_license_temp_dir.path }}/host_metrics.csv"
+      run_once: true
+
+    - name: Generate AWX host metric CSV
+      ansible.builtin.command:
+        cmd: >-
+          {{ awx_manage_command }} host_metric --csv {{ awx_license_csv_path | quote }}
+      register: awx_license_host_metric_command
+      changed_when: false
+      become: "{{ awx_license_report_become | bool }}"
+      become_user: "{{ awx_license_report_become_user }}"
+      run_once: true
+
+    - name: Check AWX host metric CSV was created
+      ansible.builtin.stat:
+        path: "{{ awx_license_csv_path }}"
+      register: awx_license_csv_stat
+      become: "{{ awx_license_report_become | bool }}"
+      become_user: "{{ awx_license_report_become_user }}"
+      run_once: true
+
+    - name: Validate AWX host metric CSV
+      ansible.builtin.assert:
+        that:
+          - awx_license_csv_stat.stat.exists
+          - awx_license_csv_stat.stat.isreg
+          - awx_license_csv_stat.stat.size | int > 0
+        fail_msg: >-
+          {{ awx_manage_command }} host_metric --csv did not create a non-empty CSV at
+          {{ awx_license_csv_path }}.
+      run_once: true
+
+    - name: Read AWX host metric CSV
+      community.general.read_csv:
+        path: "{{ awx_license_csv_path }}"
+      register: awx_license_csv
+      changed_when: false
+      become: "{{ awx_license_report_become | bool }}"
+      become_user: "{{ awx_license_report_become_user }}"
+      run_once: true
+
+    - name: Set report data
+      ansible.builtin.set_fact:
+        awx_license_report_rows: "{{ awx_license_csv.list | default([]) }}"
+        awx_license_report_headers: >-
+          {{ (awx_license_csv.list[0].keys() | list)
+             if (awx_license_csv.list | default([]) | length > 0)
+             else [] }}
+        awx_license_report_source_host: "{{ inventory_hostname }}"
+        awx_license_report_source_file: "{{ awx_license_csv_path | basename }}"
+        awx_license_report_generated_at: "{{ now(utc=true, fmt='%Y-%m-%d %H:%M:%S UTC') }}"
+      run_once: true
+
+    - name: Ensure local report output directory exists
+      ansible.builtin.file:
+        path: "{{ awx_license_report_output_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Render AWX host metric license report
+      ansible.builtin.template:
+        src: "{{ awx_license_report_template }}"
+        dest: "{{ awx_license_report_output_dir }}/{{ awx_license_report_filename }}"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Remove temporary AWX host metric files
+      ansible.builtin.file:
+        path: "{{ awx_license_temp_dir.path }}"
+        state: absent
+      when: awx_license_temp_dir.path is defined
+      become: "{{ awx_license_report_become | bool }}"
+      become_user: "{{ awx_license_report_become_user }}"
+      run_once: true
+...
