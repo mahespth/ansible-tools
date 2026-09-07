@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>{{ awx_license_report_title }}</title>
+</head>
+
+<body style="margin:0; padding:0; background-color:#f3f3f3; font-family:Arial, Helvetica, sans-serif; color:#333333;">
+{% set report_headers = awx_license_report_headers | default([]) %}
+{% set report_rows = awx_license_report_rows | default([]) %}
+
+{% if report_rows | length > 0 %}
+  {% set overall_status = 'COMPLETE' %}
+  {% set status_bg = '#e7f3e7' %}
+  {% set status_colour = '#217346' %}
+{% else %}
+  {% set overall_status = 'NO HOST METRICS' %}
+  {% set status_bg = '#fff3cd' %}
+  {% set status_colour = '#856404' %}
+{% endif %}
+
+<table width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="#f3f3f3">
+  <tr>
+    <td align="center" style="padding:20px;">
+
+      <table width="1200" border="0" cellspacing="0" cellpadding="0"
+             bgcolor="#ffffff"
+             style="width:1200px; max-width:1200px; border-collapse:collapse; background-color:#ffffff;">
+        <tr>
+          <td style="padding:24px;">
+            <h2 style="margin:0 0 8px 0; font-size:22px; color:#333333;">
+              {{ awx_license_report_title }}
+            </h2>
+
+            <p style="margin:0 0 4px 0; font-size:14px; color:#555555;">
+              Inventory:
+              <strong>{{ awx_license_inventory_name | default('Ansible inventory', true) }}</strong>
+            </p>
+            <p style="margin:0 0 4px 0; font-size:14px; color:#555555;">
+              Controller:
+              <strong>{{ awx_license_report_source_host }}</strong>
+            </p>
+            <p style="margin:0 0 4px 0; font-size:14px; color:#555555;">
+              CSV source:
+              <strong>{{ awx_license_report_source_file | default('host_metrics.csv') }}</strong>
+            </p>
+            <p style="margin:0 0 20px 0; font-size:14px; color:#555555;">
+              Generated:
+              <strong>{{ awx_license_report_generated_at | default('N/A', true) }}</strong>
+            </p>
+
+            <table width="100%" border="0" cellspacing="0" cellpadding="10"
+                   style="width:100%; border-collapse:collapse; margin-bottom:14px;">
+              <tr>
+                <td bgcolor="{{ status_bg }}"
+                    style="border:1px solid #cccccc; font-size:18px; color:{{ status_colour }};">
+                  <strong>{{ overall_status }}</strong>
+                  {% if report_rows | length > 0 %}
+                  &mdash; AWX host metric data was collected successfully from {{ awx_license_report_source_host }}.
+                  {% else %}
+                  &mdash; no host metric rows were returned.
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+
+            <table width="100%" border="0" cellspacing="0" cellpadding="8"
+                   style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+              <tr>
+                <td width="50%" bgcolor="#e7f3e7"
+                    style="border:1px solid #cccccc; font-size:15px;">
+                  <strong>{{ report_rows | length }}</strong><br>
+                  host metric rows
+                </td>
+                <td width="50%" bgcolor="#eeeeee"
+                    style="border:1px solid #cccccc; font-size:15px;">
+                  <strong>{{ report_headers | length }}</strong><br>
+                  CSV columns
+                </td>
+              </tr>
+            </table>
+
+            <h3 style="margin:0 0 10px 0; font-size:18px; color:#333333;">
+              Host Metric Data
+            </h3>
+
+            {% if report_rows | length > 0 %}
+            <table width="100%" border="0" cellspacing="0" cellpadding="7"
+                   style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:25px;">
+              <tr bgcolor="#333333">
+                {% for header in report_headers %}
+                <th align="left"
+                    style="border:1px solid #cccccc; color:#ffffff; white-space:nowrap; font-size:11px;">
+                  {{ header }}
+                </th>
+                {% endfor %}
+              </tr>
+
+              {% for row in report_rows %}
+              <tr bgcolor="{% if loop.index is even %}#f7f7f7{% else %}#ffffff{% endif %}">
+                {% for header in report_headers %}
+                <td style="border:1px solid #cccccc; vertical-align:top; word-break:break-word;">
+                  {{ row[header] | default('', true) }}
+                </td>
+                {% endfor %}
+              </tr>
+              {% endfor %}
+            </table>
+            {% else %}
+            <p style="margin:0 0 25px 0; color:#555555;">
+              No host metric data was returned.
+            </p>
+            {% endif %}
+
+            <p style="margin:25px 0 0 0; padding-top:15px; border-top:1px solid #dddddd;
+                      font-size:12px; color:#777777;">
+              This report reflects the host metric data returned by
+              <strong>awx-manage host_metric --csv &lt;filename&gt;</strong> on the selected automation controller at the time the automation ran.
+            </p>
+
+          </td>
+        </tr>
+      </table>
+
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>
