@@ -1,0 +1,59 @@
+---
+- name: Build dynamic target inventory from AAP
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    aap_url: "https://aap.example.com"
+    aap_token: "{{ lookup('env', 'AAP_TOKEN') }}"
+    host_match: "linux"
+
+  tasks:
+    - name: Find matching hosts in AAP
+      ansible.builtin.uri:
+        url: >-
+          {{ aap_url }}/api/controller/v2/hosts/?name__icontains={{ host_match | urlencode }}&page_size=200
+        method: GET
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+          Accept: "application/json"
+        validate_certs: true
+        return_content: true
+      register: aap_hosts
+      no_log: true
+
+    - name: Show number of matching hosts
+      ansible.builtin.debug:
+        msg: "Found {{ aap_hosts.json.count }} matching hosts"
+
+    - name: Add matching hosts to temporary inventory
+      ansible.builtin.add_host: >-
+        {{
+          {
+            'name': item.name,
+            'groups': ['copy_targets']
+          }
+          | combine(item.variables | default('{}') | from_yaml)
+        }}
+      loop: "{{ aap_hosts.json.results }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+
+- name: Copy data to matching hosts
+  hosts: copy_targets
+  gather_facts: false
+
+  tasks:
+    - name: Show host and variables for testing
+      ansible.builtin.debug:
+        msg:
+          - "inventory_hostname={{ inventory_hostname }}"
+          - "ansible_host={{ ansible_host | default(inventory_hostname) }}"
+          - "ansible_user={{ ansible_user | default('not defined') }}"
+
+    - name: Copy file
+      ansible.builtin.copy:
+        src: /files/myfile.dat
+        dest: /tmp/myfile.dat
+        mode: "0644"
