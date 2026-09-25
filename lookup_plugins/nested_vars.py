@@ -8,17 +8,33 @@ from ansible.plugins.lookup import LookupBase
 
 DOCUMENTATION = r"""
 name: nested_vars
-author: Steve Maher
+author: Stephen Maher
 short_description: Resolve nested Ansible variables using dotted paths
 description:
-  - Resolves an Ansible variable by name and walks nested dictionaries/lists.
-  - For example C(workflow.start.nodes) resolves C(workflow), then C(start),
-    then C(nodes).
+  - Resolves a variable by name and walks nested dictionaries or lists.
+  - For example C(workflow.start.nodes) resolves C(workflow), then C(start), then C(nodes).
 options:
   _terms:
     description:
-      - Variable paths to resolve.
+      - One or more dotted variable paths to resolve.
     required: true
+"""
+
+EXAMPLES = r"""
+- name: Resolve a nested variable
+  ansible.builtin.debug:
+    msg: "{{ lookup('nested_vars', 'workflow.start.name') }}"
+
+- name: Resolve a list item
+  ansible.builtin.debug:
+    msg: "{{ lookup('nested_vars', 'workflow.start.nodes.0.identifier') }}"
+"""
+
+RETURN = r"""
+_raw:
+  description:
+    - The resolved value or values.
+  type: list
 """
 
 
@@ -31,16 +47,11 @@ class LookupModule(LookupBase):
         for term in terms:
             if not isinstance(term, str):
                 raise AnsibleError(
-                    "nested_vars lookup expects a string, got %r" % type(term).__name__
+                    "nested_vars expects a string path, got %s"
+                    % type(term).__name__
                 )
 
             parts = term.split(".")
-
-            if not parts or not parts[0]:
-                raise AnsibleError(
-                    "nested_vars lookup received an empty variable path"
-                )
-
             root = parts[0]
 
             if root not in variables:
@@ -58,7 +69,6 @@ class LookupModule(LookupBase):
                             "Key '%s' was not found while resolving '%s'"
                             % (part, term)
                         )
-
                     value = value[part]
 
                 elif (
@@ -67,24 +77,23 @@ class LookupModule(LookupBase):
                 ):
                     try:
                         index = int(part)
-                    except ValueError:
+                    except ValueError as exc:
                         raise AnsibleError(
-                            "'%s' must be a numeric list index while resolving '%s'"
+                            "'%s' is not a valid list index while resolving '%s'"
                             % (part, term)
-                        )
+                        ) from exc
 
                     try:
                         value = value[index]
-                    except IndexError:
+                    except IndexError as exc:
                         raise AnsibleError(
                             "List index %s is out of range while resolving '%s'"
                             % (index, term)
-                        )
+                        ) from exc
 
                 else:
                     raise AnsibleError(
-                        "Cannot resolve '%s' in '%s': parent is %s, "
-                        "not a dictionary or list"
+                        "Cannot resolve '%s' in '%s'; parent value is %s"
                         % (part, term, type(value).__name__)
                     )
 
