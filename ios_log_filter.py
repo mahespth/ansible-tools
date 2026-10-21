@@ -24,6 +24,8 @@ ICMP_TYPES = {
     (3, 5): "source-route-failed",
     (5, 0): "redirect-network",
     (5, 1): "redirect-host",
+    (5, 2): "redirect-tos-network",
+    (5, 3): "redirect-tos-host",
     (8, 0): "echo-request",
     (9, 0): "router-advertisement",
     (10, 0): "router-solicitation",
@@ -32,32 +34,81 @@ ICMP_TYPES = {
     (12, 0): "parameter-problem",
     (13, 0): "timestamp-request",
     (14, 0): "timestamp-reply",
+    (15, 0): "information-request",
+    (16, 0): "information-reply",
     (17, 0): "address-mask-request",
     (18, 0): "address-mask-reply",
 }
 
 
-def load_hosts(filename):
+IP_RE = re.compile(
+    r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])"
+)
+
+ENDPOINT_RE = re.compile(
+    r"(?<![\w.])"
+    r"(?P<ip>(?:\d{1,3}\.){3}\d{1,3})"
+    r"\((?P<port>\d+)\)"
+    r"(?![\w.])"
+)
+
+TCP_UDP_RE = re.compile(
+    ENDPOINT_RE.pattern + "|" + IP_RE.pattern
+)
+
+ICMP_RE = re.compile(
+    r"(?P<prefix>\s*)"
+    r"\((?P<type>\d{1,3})"
+    r"(?:/(?P<code>\d{1,3}))?\)"
+)
+
+PROTO_RE = re.compile(
+    r"\b(tcp|udp|icmp)\b", re.IGNORECASE
+)
+
+
+def debug(message, enabled):
+    if enabled:
+        print(f"DEBUG: {message}", file=sys.stderr)
+
+
+def load_hosts(filename, debug_enabled=False):
     hosts = {}
 
     with open(filename, encoding="utf-8") as f:
-        for line in f:
+        for lineno, line in enumerate(f, 1):
             fields = line.split("#", 1)[0].split()
 
             if len(fields) < 2:
                 continue
 
             try:
-                ip = str(ipaddress.ip_address(fields[0]))
-            except ValueError:
+                ip = str(ipaddress.IPv4Address(fields[0]))
+            except ipaddress.AddressValueError:
+                debug(
+                    f"{filename}:{lineno}: invalid host IP "
+                    f"{fields[0]!r}",
+                    debug_enabled
+                )
                 continue
 
             hosts[ip] = fields[1]
 
+    debug(
+        f"Loaded {len(hosts)} hosts from {filename}",
+        debug_enabled
+    )
+
+    for ip, hostname in hosts.items():
+        debug(
+            f"HOST: {ip} -> {hostname}",
+            debug_enabled
+        )
+
     return hosts
 
 
-def load_services(filename):
+def load_services(filename, debug_enabled=False):
     services = {}
 
     with open(filename, encoding="utf-8") as f:
@@ -70,68 +121,119 @@ def load_services(filename):
             port, protocol = fields[1].split("/", 1)
 
             if port.isdigit():
-                services[(port, protocol.lower())] = fields[0]
+                services.setdefault(
+                    (port, protocol.lower()),
+                    fields[0]
+                )
+
+    debug(
+        f"Loaded {len(services)} services from {filename}",
+        debug_enabled
+    )
 
     return services
 
 
-# Match IPv4 address with optional (port) or (type/code)
-IP_PATTERN = re.compile(
-    r"(?<![\w.])"
-    r"(?P<ip>(?:\d{1,3}\.){3}\d{1,3})"
-    r"(?:\((?P<value>\d+(?:/\d+)?)\))?"
-    r"(?![\w.])"
-)
+def translate(line, hosts, services, debug_enabled=False):
+    proto_match = PROTO_RE.search(line)
+    protocol = (
+        proto_match.group(1).lower()
+        if proto_match else None
+    )
 
-PROTOCOL_PATTERN = re.compile(
-    r"\b(tcp|udp|icmp)\b",
-    re.IGNORECASE
-)
-
-
-def translate(line, hosts, services):
-    proto_match = PROTOCOL_PATTERN.search(line)
-    protocol = proto_match.group(1).lower() if proto_match else None
-
-    def replace(match):
-        ip = match.group("ip")
-        value = match.group("value")
-
+    def resolve_ip(ip):
         try:
             ip = str(ipaddress.IPv4Address(ip))
         except ipaddress.AddressValueError:
-            return match.group(0)
+            debug(
+                f"INVALID IP: {ip}",
+                debug_enabled
+            )
+            return ip
 
-        hostname = hosts.get(ip, ip)
+        hostname = hosts.get(ip)
 
-        if value is None:
-            return hostname
+        if hostname is None:
+            debug(
+                f"NO HOST MATCH: {ip}",
+                debug_enabled
+            )
+            return ip
 
-        if protocol in ("tcp", "udp"):
-            service = services.get((value, protocol), value)
-            return f"{hostname}({service})"
+        debug(
+            f"HOST MATCH: {ip} -> {hostname}",
+            debug_enabled
+        )
+        return hostname
 
-        if protocol == "icmp":
-            if "/" in value:
-                icmp_type, icmp_code = map(int, value.split("/"))
-            else:
-                icmp_type, icmp_code = int(value), 0
+    def replace_ip(match):
+        return resolve_ip(match.group(0))
 
-            name = ICMP_TYPES.get(
-                (icmp_type, icmp_code),
-                f"{icmp_type}/{icmp_code}"
+    if protocol in ("tcp", "udp"):
+
+        def replace_tcp_udp(match):
+            if match.group("ip") is not None:
+                ip = match.group("ip")
+                port = match.group("port")
+
+                hostname = resolve_ip(ip)
+                service = services.get(
+                    (port, protocol), port
+                )
+
+                if service != port:
+                    debug(
+                        f"SERVICE MATCH: "
+                        f"{port}/{protocol} -> {service}",
+                        debug_enabled
+                    )
+
+                return f"{hostname}({service})"
+
+            return replace_ip(match)
+
+        return TCP_UDP_RE.sub(replace_tcp_udp, line)
+
+    if protocol == "icmp":
+        line = IP_RE.sub(replace_ip, line)
+
+        def replace_icmp(match):
+            type_num = int(match.group("type"))
+            code_num = (
+                int(match.group("code"))
+                if match.group("code") is not None
+                else 0
             )
 
-            return f"{hostname}({name})"
+            if type_num > 255 or code_num > 255:
+                return match.group(0)
 
-        return f"{hostname}({value})"
+            name = ICMP_TYPES.get(
+                (type_num, code_num)
+            )
 
-    return IP_PATTERN.sub(replace, line)
+            if name is None:
+                debug(
+                    f"UNKNOWN ICMP: {type_num}/{code_num}",
+                    debug_enabled
+                )
+                return match.group(0)
+
+            debug(
+                f"ICMP MATCH: {type_num}/{code_num} -> {name}",
+                debug_enabled
+            )
+
+            return f'{match.group("prefix")}({name})'
+
+        return ICMP_RE.sub(replace_icmp, line)
+
+    return IP_RE.sub(replace_ip, line)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Translate Cisco IOS TCP/UDP/ICMP ACL logs"
+        description="Cisco IOS TCP/UDP/ICMP log filter"
     )
 
     parser.add_argument(
@@ -151,11 +253,17 @@ def main():
         help="Input log file (default: stdin)"
     )
 
+    parser.add_argument(
+        "-d", "--debug",
+        action="store_true",
+        help="Show hostname and service lookup debugging"
+    )
+
     args = parser.parse_args()
 
     try:
-        hosts = load_hosts(args.hosts)
-        services = load_services(args.services)
+        hosts = load_hosts(args.hosts, args.debug)
+        services = load_services(args.services, args.debug)
 
         source = (
             open(args.file, encoding="utf-8", errors="replace")
@@ -166,7 +274,9 @@ def main():
         with source as lines:
             for line in lines:
                 sys.stdout.write(
-                    translate(line, hosts, services)
+                    translate(
+                        line, hosts, services, args.debug
+                    )
                 )
 
     except (OSError, UnicodeError) as exc:
