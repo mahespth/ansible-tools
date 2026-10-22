@@ -1,0 +1,263 @@
+---
+
+# merge_acl.yml
+#
+# Expected variables:
+#
+# core_acl:
+#   name: "110"
+#   aces:
+#     - sequence: 10
+#       ...
+#
+# site_afi:
+#   acls:
+#     - name: "110"
+#       aces:
+#         - sequence: 10        # replaces core sequence 10
+#           ...
+#         - sequence: 20        # adds new sequence 20
+#           ...
+#         - sequence: 30
+#           state: absent       # removes sequence 30
+#
+# merged_afi_acls:
+#   Existing output list for this AFI.
+
+
+# ------------------------------------------------------------
+# Find the site-specific ACL matching this core ACL
+# ------------------------------------------------------------
+
+- name: Find site override for ACL
+  ansible.builtin.set_fact:
+    site_acl: >-
+      {{
+        site_afi.acls
+        | default([])
+        | selectattr('name', 'equalto', core_acl.name)
+        | first
+        | default({'aces': []})
+      }}
+
+# ------------------------------------------------------------
+# Build a map of site rules keyed by sequence number
+#
+# Example:
+#
+# site_ace_map:
+#   "10":
+#     sequence: 10
+#     grant: permit
+#   "30":
+#     sequence: 30
+#     state: absent
+#
+# ------------------------------------------------------------
+
+- name: Initialise site ACE map
+  ansible.builtin.set_fact:
+    site_ace_map: {}
+
+- name: Build site ACE map
+  ansible.builtin.set_fact:
+    site_ace_map: >-
+      {{
+        site_ace_map
+        | combine({
+            (item.sequence | string): item
+          })
+      }}
+  loop: >-
+    {{
+      site_acl.aces
+      | default([])
+      | selectattr('sequence', 'defined')
+      | list
+    }}
+  loop_control:
+    label: "{{ item.sequence }}"
+
+
+# ------------------------------------------------------------
+# Record sequence numbers already present in core
+# ------------------------------------------------------------
+
+- name: Get core sequence numbers
+  ansible.builtin.set_fact:
+    core_sequences: >-
+      {{
+        core_acl.aces
+        | default([])
+        | selectattr('sequence', 'defined')
+        | map(attribute='sequence')
+        | list
+      }}
+
+
+# ------------------------------------------------------------
+# Walk through the original core ACL.
+#
+# This preserves unsequenced entries and their ordering.
+# ------------------------------------------------------------
+
+- name: Initialise merged ACE list
+  ansible.builtin.set_fact:
+    merged_aces: []
+
+
+# Keep ACEs which have no sequence.
+#
+# Examples could include remarks or ACL formats that don't
+# contain explicit sequence numbers.
+- name: Keep unsequenced core ACE
+  ansible.builtin.set_fact:
+    merged_aces: "{{ merged_aces + [item] }}"
+  loop: "{{ core_acl.aces | default([]) }}"
+  loop_control:
+    label: "{{ item.sequence | default('unsequenced') }}"
+  when:
+    - item.sequence is not defined
+
+
+# Keep a core ACE when the site doesn't override it
+- name: Keep unchanged core ACE
+  ansible.builtin.set_fact:
+    merged_aces: "{{ merged_aces + [item] }}"
+  loop: "{{ core_acl.aces | default([]) }}"
+  loop_control:
+    label: "{{ item.sequence | default('unsequenced') }}"
+  when:
+    - item.sequence is defined
+    - (item.sequence | string) not in site_ace_map
+
+
+# Replace a core ACE when a site ACE has the same sequence.
+#
+# state is removed because it is our own merge metadata and
+# isn't part of the cisco.ios.ios_acls data model.
+- name: Replace core ACE with site ACE
+  ansible.builtin.set_fact:
+    merged_aces: >-
+      {{
+        merged_aces
+        +
+        [
+          site_ace_map[item.sequence | string]
+          | dict2items
+          | rejectattr('key', 'equalto', 'state')
+          | items2dict
+        ]
+      }}
+  loop: "{{ core_acl.aces | default([]) }}"
+  loop_control:
+    label: "{{ item.sequence | default('unsequenced') }}"
+  when:
+    - item.sequence is defined
+    - (item.sequence | string) in site_ace_map
+    - site_ace_map[item.sequence | string].state | default('present') != 'absent'
+
+
+# There is intentionally no task for:
+#
+#   existing sequence + state: absent
+#
+# Since it isn't appended to merged_aces, it is deleted.
+
+
+# ------------------------------------------------------------
+# Find site sequences which DON'T exist in core.
+#
+# These are new ACEs.
+# ------------------------------------------------------------
+
+- name: Initialise new site ACE list
+  ansible.builtin.set_fact:
+    new_site_aces: []
+
+- name: Add new site ACE
+  ansible.builtin.set_fact:
+    new_site_aces: >-
+      {{
+        new_site_aces
+        +
+        [
+          item
+          | dict2items
+          | rejectattr('key', 'equalto', 'state')
+          | items2dict
+        ]
+      }}
+  loop: >-
+    {{
+      site_acl.aces
+      | default([])
+      | selectattr('sequence', 'defined')
+      | list
+    }}
+  loop_control:
+    label: "{{ item.sequence }}"
+  when:
+    - item.sequence not in core_sequences
+    - item.state | default('present') != 'absent'
+
+
+# ------------------------------------------------------------
+# Add new site sequences and sort sequenced ACEs.
+#
+# Because unsequenced ACEs may exist, don't try to sort the
+# complete list by sequence.
+# ------------------------------------------------------------
+
+- name: Split merged ACEs into sequenced and unsequenced
+  ansible.builtin.set_fact:
+    merged_unsequenced_aces: >-
+      {{
+        merged_aces
+        | rejectattr('sequence', 'defined')
+        | list
+      }}
+
+    merged_sequenced_aces: >-
+      {{
+        merged_aces
+        | selectattr('sequence', 'defined')
+        | list
+        +
+        new_site_aces
+      }}
+
+
+- name: Rebuild final ACE list
+  ansible.builtin.set_fact:
+    final_aces: >-
+      {{
+        merged_unsequenced_aces
+        +
+        (
+          merged_sequenced_aces
+          | sort(attribute='sequence')
+        )
+      }}
+
+
+# ------------------------------------------------------------
+# Replace ONLY the aces member in the original ACL.
+#
+# name, acl_type and any other ACL-level attributes are
+# therefore preserved.
+# ------------------------------------------------------------
+
+- name: Add completed ACL to AFI
+  ansible.builtin.set_fact:
+    merged_afi_acls: >-
+      {{
+        merged_afi_acls
+        +
+        [
+          core_acl
+          | combine({
+              'aces': final_aces
+            })
+        ]
+      }}
